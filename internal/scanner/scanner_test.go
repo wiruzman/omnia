@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"omnia-search-tui/internal/model"
 )
@@ -101,5 +102,38 @@ func TestWalkWithOptionsResumesFromRootAndPath(t *testing.T) {
 	sort.Strings(files)
 	if len(files) != 1 || files[0] != "c.txt" {
 		t.Fatalf("expected only c.txt after resume, got %+v", files)
+	}
+}
+
+func TestWalkWithOptionsThrottlesAtConfiguredInterval(t *testing.T) {
+	tmp := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		if err := os.WriteFile(filepath.Join(tmp, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var sleeps []time.Duration
+	s := New(nil)
+	err := s.WalkWithOptions([]string{tmp}, func(model.Entry) error {
+		return nil
+	}, nil, func(error) {}, WalkOptions{
+		ThrottleEvery: 2,
+		ThrottleDelay: 7 * time.Millisecond,
+		throttleSleep: func(delay time.Duration) {
+			sleeps = append(sleeps, delay)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(sleeps) != 2 {
+		t.Fatalf("expected 2 throttle sleeps for 4 scanned entries, got %d", len(sleeps))
+	}
+	for _, delay := range sleeps {
+		if delay != 7*time.Millisecond {
+			t.Fatalf("expected throttle delay 7ms, got %s", delay)
+		}
 	}
 }

@@ -13,6 +13,29 @@ func TestNormalizeDefaults(t *testing.T) {
 	}
 }
 
+func TestDefaultScanThrottle(t *testing.T) {
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("default config: %v", err)
+	}
+	if cfg.ScanThrottleEvery != 250 {
+		t.Fatalf("expected default scan_throttle_every 250, got %d", cfg.ScanThrottleEvery)
+	}
+	if cfg.ScanThrottleMs != 5 {
+		t.Fatalf("expected default scan_throttle_ms 5, got %d", cfg.ScanThrottleMs)
+	}
+}
+
+func TestNormalizeAllowsDisablingScanThrottle(t *testing.T) {
+	cfg := normalize(Config{ScanThrottleEvery: 0, ScanThrottleMs: 0})
+	if cfg.ScanThrottleEvery != 250 {
+		t.Fatalf("expected scan_throttle_every to fall back to 250, got %d", cfg.ScanThrottleEvery)
+	}
+	if cfg.ScanThrottleMs != 0 {
+		t.Fatalf("expected scan_throttle_ms 0 to disable throttling, got %d", cfg.ScanThrottleMs)
+	}
+}
+
 func TestNormalizeInjectsHomeIncludePath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

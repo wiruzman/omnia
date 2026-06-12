@@ -61,6 +61,35 @@ func TestStoreUpsertQueryAndCleanup(t *testing.T) {
 	}
 }
 
+func TestStoreCleanupKeepsEntriesFromCurrentScan(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	scanID := time.Now().UnixMicro()
+	now := time.Now()
+	if err := st.UpsertBatch(ctx, scanID, []model.Entry{
+		{Path: "/tmp/current.txt", Name: "current.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, Size: 10, CreatedAt: now, ModifiedAt: now},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.CleanupStale(ctx, scanID, []string{"/tmp"}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := st.Query(ctx, "current", sorter.SortSpec{Column: sorter.SortName, Direction: sorter.Asc}, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Entries) != 1 || res.Entries[0].Name != "current.txt" {
+		t.Fatalf("expected current scan entry to survive cleanup, got %+v", res.Entries)
+	}
+}
+
 func TestStoreQueryContainsForMediumShortTerms(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))

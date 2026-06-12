@@ -19,7 +19,7 @@ func main() {
 	}
 	defer st.Close()
 
-	scanID := time.Now().UnixNano()
+	scanID := time.Now().UnixMicro()
 	_ = st.BeginScan(ctx, scanID)
 
 	now := time.Now()

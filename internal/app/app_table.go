@@ -7,6 +7,7 @@ import (
 	"github.com/rivo/tview"
 
 	"omnia-search-tui/internal/model"
+	"omnia-search-tui/internal/sorter"
 )
 
 func (a *App) renderHeader(startCol int) {
@@ -94,13 +95,28 @@ func (a *App) visibleStartForSelection() int {
 	if a.selectedCol <= 0 {
 		return 0
 	}
-	if a.selectedCol <= 2 {
+	if a.selectedCol <= 3 {
 		return 1
 	}
 	if a.selectedCol <= 4 {
 		return 2
 	}
 	return 3
+}
+
+func sortColumnIndex(col sorter.Column) int {
+	switch col {
+	case sorter.SortPath:
+		return 1
+	case sorter.SortSize:
+		return 3
+	case sorter.SortCreated:
+		return 4
+	case sorter.SortModified:
+		return 5
+	default:
+		return 0
+	}
 }
 
 func (a *App) columnText(e model.Entry, col int) string {

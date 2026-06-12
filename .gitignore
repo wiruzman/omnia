@@ -1,2 +1,30 @@
-omnia
-bench-index.bleve
+# macOS
+.DS_Store
+
+# Editor/local tooling
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Go build and test output
+/omnia
+/omnia-daemon
+/bin/
+/build/
+/dist/
+*.test
+*.out
+coverage.out
+cover.out
+
+# Local configuration and runtime state
+/config.json
+/daemon/
+*.log
+*.pid
+
+# Local search indexes and benchmark data
+/index.bleve/
+/bench-index.bleve/
+/bench-index.db

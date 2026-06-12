@@ -1,0 +1,20 @@
+{
+  "include_paths": [
+    "/Volumes"
+  ],
+  "exclude_globs": [
+    ".git",
+    "node_modules",
+    "Library/Caches",
+    ".Trash",
+    "Trash"
+  ],
+  "index_db_path": "index.bleve",
+  "store_backend": "bleve",
+  "daemon_dir": "daemon",
+  "sort_column": "name",
+  "sort_direction": "ASC",
+  "max_results": 5000,
+  "debounce_ms": 120,
+  "scan_batch_size": 1000
+}

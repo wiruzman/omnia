@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"omnia-search-tui/internal/config"
@@ -14,7 +15,7 @@ import (
 )
 
 const (
-	version  = 1
+	version  = 2
 	limitCap = 400
 )
 
@@ -52,18 +53,19 @@ func Load(path string, sortSpec sorter.SortSpec, limit int) (store.QueryResult, 
 	if err := json.Unmarshal(b, &cache); err != nil {
 		return store.QueryResult{}, false, err
 	}
-	if cache.Version != version ||
-		cache.SortColumn != sortSpec.Column ||
-		cache.SortDirection != sortSpec.Direction ||
-		cache.Limit != limit ||
-		len(cache.Entries) == 0 {
-		return store.QueryResult{}, false, nil
-	}
-
 	entries := append([]model.Entry(nil), cache.Entries...)
 	if len(entries) > limit {
 		entries = entries[:limit]
 	}
+	if cache.Version != version ||
+		cache.SortColumn != sortSpec.Column ||
+		cache.SortDirection != sortSpec.Direction ||
+		cache.Limit != limit ||
+		len(entries) == 0 ||
+		!isSorted(entries, sortSpec) {
+		return store.QueryResult{}, false, nil
+	}
+
 	total := cache.Total
 	if total < len(entries) {
 		total = len(entries)
@@ -105,4 +107,48 @@ func Save(path string, sortSpec sorter.SortSpec, limit int, result store.QueryRe
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+func isSorted(entries []model.Entry, sortSpec sorter.SortSpec) bool {
+	for i := 1; i < len(entries); i++ {
+		if compareEntries(entries[i-1], entries[i], sortSpec) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func compareEntries(a, b model.Entry, sortSpec sorter.SortSpec) int {
+	cmp := 0
+	switch sortSpec.Column {
+	case sorter.SortPath:
+		cmp = strings.Compare(strings.ToLower(a.Path), strings.ToLower(b.Path))
+	case sorter.SortSize:
+		if a.Size < b.Size {
+			cmp = -1
+		} else if a.Size > b.Size {
+			cmp = 1
+		}
+	case sorter.SortCreated:
+		if a.CreatedAt.Before(b.CreatedAt) {
+			cmp = -1
+		} else if a.CreatedAt.After(b.CreatedAt) {
+			cmp = 1
+		}
+	case sorter.SortModified:
+		if a.ModifiedAt.Before(b.ModifiedAt) {
+			cmp = -1
+		} else if a.ModifiedAt.After(b.ModifiedAt) {
+			cmp = 1
+		}
+	default:
+		cmp = strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	}
+	if sortSpec.Direction == sorter.Desc {
+		cmp = -cmp
+	}
+	if cmp != 0 {
+		return cmp
+	}
+	return strings.Compare(strings.ToLower(a.Path), strings.ToLower(b.Path))
 }

@@ -106,7 +106,7 @@ func (a *App) buildUI() {
 			return
 		}
 		a.selected = row - 1
-		a.selectedCol = a.visibleStartCol + col
+		a.selectedCol = a.logicalColumnForPhysical(col)
 		if a.selectedCol < 0 {
 			a.selectedCol = 0
 		}
@@ -155,7 +155,7 @@ func (a *App) buildUI() {
 		AddPage("progress", a.buildProgressPage(), true, false)
 	a.pages.SetBackgroundColor(tcell.ColorDefault)
 
-	a.renderHeader(0)
+	a.renderHeader(a.visibleColumns())
 	a.updateStatus()
 	a.renderProgressTable()
 }

@@ -34,6 +34,7 @@ type Service struct {
 const watchEventMask = notify.Create | notify.Write | notify.Remove | notify.Rename
 
 const statusHeartbeatInterval = 15 * time.Second
+const incrementalFlushDebounce = 900 * time.Millisecond
 
 func New(cfg config.Config, logger *log.Logger) (*Service, error) {
 	st, err := store.OpenWithBackend(cfg.IndexDBPath, cfg.StoreBackend)
@@ -113,10 +114,11 @@ func (s *Service) Run(ctx context.Context) error {
 	defer notify.Stop(events)
 
 	pending := make(map[string]struct{}, 4096)
-	flushTicker := time.NewTicker(900 * time.Millisecond)
+	flushTimer := time.NewTimer(time.Hour)
+	stopTimer(flushTimer)
 	statusTicker := time.NewTicker(1 * time.Second)
 	triggerTicker := time.NewTicker(1 * time.Second)
-	defer flushTicker.Stop()
+	defer flushTimer.Stop()
 	defer statusTicker.Stop()
 	defer triggerTicker.Stop()
 
@@ -144,9 +146,10 @@ func (s *Service) Run(ctx context.Context) error {
 				path := filepath.Clean(e.Path())
 				if !s.isDaemonManagedPath(path) {
 					pending[path] = struct{}{}
+					resetTimer(flushTimer, incrementalFlushDebounce)
 				}
 			}
-		case <-flushTicker.C:
+		case <-flushTimer.C:
 			if s.indexer.IsRunning() {
 				continue
 			}
@@ -230,6 +233,9 @@ func (s *Service) Run(ctx context.Context) error {
 				lastCountAt = time.Now()
 				snapshotDirty = true
 				s.logger.Printf("indexing finished | total_indexed=%d last_error=%s", total, idx.LastError)
+				if len(pending) > 0 {
+					resetTimer(flushTimer, incrementalFlushDebounce)
+				}
 			}
 			if !idx.Running && snapshotDirty {
 				if err := s.publishReadonlySnapshot(ctx); err != nil {
@@ -273,6 +279,21 @@ func shouldRefreshIndexedTotal(indexingRunning bool, needsRecount bool, lastCoun
 		return false
 	}
 	return indexingRunning || needsRecount
+}
+
+func resetTimer(timer *time.Timer, delay time.Duration) {
+	stopTimer(timer)
+	timer.Reset(delay)
+}
+
+func stopTimer(timer *time.Timer) {
+	if timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
+	}
 }
 
 type flushStats struct {
@@ -565,6 +586,11 @@ func RunMain(ctx context.Context) error {
 	}
 	defer f.Close()
 	logger := log.New(io.MultiWriter(os.Stdout, f), "", log.LstdFlags)
+	if err := lowerDaemonPriority(); err != nil {
+		logger.Printf("lower daemon priority failed: %v", err)
+	} else {
+		logger.Printf("daemon priority lowered for background indexing")
+	}
 
 	svc, err := New(cfg, logger)
 	if err != nil {

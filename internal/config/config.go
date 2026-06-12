@@ -10,16 +10,18 @@ import (
 )
 
 type Config struct {
-	IncludePaths  []string `json:"include_paths"`
-	ExcludeGlobs  []string `json:"exclude_globs"`
-	IndexDBPath   string   `json:"index_db_path"`
-	StoreBackend  string   `json:"store_backend"`
-	MaxResults    int      `json:"max_results"`
-	DebounceMs    int      `json:"debounce_ms"`
-	ScanBatchSize int      `json:"scan_batch_size"`
-	DaemonDir     string   `json:"daemon_dir"`
-	SortColumn    string   `json:"sort_column"`
-	SortDirection string   `json:"sort_direction"`
+	IncludePaths      []string `json:"include_paths"`
+	ExcludeGlobs      []string `json:"exclude_globs"`
+	IndexDBPath       string   `json:"index_db_path"`
+	StoreBackend      string   `json:"store_backend"`
+	MaxResults        int      `json:"max_results"`
+	DebounceMs        int      `json:"debounce_ms"`
+	ScanBatchSize     int      `json:"scan_batch_size"`
+	ScanThrottleEvery int      `json:"scan_throttle_every"`
+	ScanThrottleMs    int      `json:"scan_throttle_ms"`
+	DaemonDir         string   `json:"daemon_dir"`
+	SortColumn        string   `json:"sort_column"`
+	SortDirection     string   `json:"sort_direction"`
 }
 
 func configDir() (string, error) {
@@ -49,14 +51,16 @@ func Default() (Config, error) {
 			".Trash",
 			"Trash",
 		},
-		IndexDBPath:   "index.bleve",
-		StoreBackend:  "bleve",
-		MaxResults:    5000,
-		DebounceMs:    120,
-		ScanBatchSize: 1000,
-		DaemonDir:     "daemon",
-		SortColumn:    "name",
-		SortDirection: "ASC",
+		IndexDBPath:       "index.bleve",
+		StoreBackend:      "bleve",
+		MaxResults:        5000,
+		DebounceMs:        120,
+		ScanBatchSize:     1000,
+		ScanThrottleEvery: 250,
+		ScanThrottleMs:    5,
+		DaemonDir:         "daemon",
+		SortColumn:        "name",
+		SortDirection:     "ASC",
 	}, nil
 }
 
@@ -119,6 +123,12 @@ func normalize(cfg Config) Config {
 	}
 	if cfg.ScanBatchSize <= 0 {
 		cfg.ScanBatchSize = 1000
+	}
+	if cfg.ScanThrottleEvery <= 0 {
+		cfg.ScanThrottleEvery = 250
+	}
+	if cfg.ScanThrottleMs < 0 {
+		cfg.ScanThrottleMs = 0
 	}
 	if cfg.DaemonDir == "" {
 		if d, err := Default(); err == nil {

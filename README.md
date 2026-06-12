@@ -107,6 +107,8 @@ Key fields:
 - max_results: max rows shown per query
 - debounce_ms: search debounce
 - scan_batch_size: batch size for index upserts
+- scan_throttle_every: number of scanned entries between low-power pauses during full reindex
+- scan_throttle_ms: pause duration for each low-power scan pause; set to 0 to disable throttling
 
 ## Benchmark
 

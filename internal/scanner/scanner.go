@@ -27,6 +27,9 @@ type Scanner struct {
 type WalkOptions struct {
 	ResumeRoot      string
 	ResumeAfterPath string
+	ThrottleEvery   int
+	ThrottleDelay   time.Duration
+	throttleSleep   func(time.Duration)
 }
 
 func New(excludes []string) *Scanner {
@@ -167,6 +170,7 @@ func (s *Scanner) WalkWithOptions(roots []string, emit func(model.Entry) error, 
 			if progress != nil && scanned%250 == 0 {
 				progress(Progress{Scanned: scanned, Current: abs, Root: root, RootScanned: scannedByRoot[root]})
 			}
+			options.throttle(scanned)
 			return nil
 		})
 		if err != nil {
@@ -180,6 +184,20 @@ func (s *Scanner) WalkWithOptions(roots []string, emit func(model.Entry) error, 
 		progress(Progress{Scanned: scanned})
 	}
 	return nil
+}
+
+func (o WalkOptions) throttle(scanned int64) {
+	if o.ThrottleEvery <= 0 || o.ThrottleDelay <= 0 || scanned <= 0 {
+		return
+	}
+	if scanned%int64(o.ThrottleEvery) != 0 {
+		return
+	}
+	sleep := o.throttleSleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	sleep(o.ThrottleDelay)
 }
 
 func (s *Scanner) EntryFromPath(path string, root string) (model.Entry, error) {

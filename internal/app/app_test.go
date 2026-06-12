@@ -52,6 +52,23 @@ func (m *mockSystemAdapter) MoveToTrash(path string) error {
 	return m.trashErr
 }
 
+type previewTrackingBackend struct {
+	store.Backend
+
+	previewCalls int
+	queryCalls   int
+}
+
+func (p *previewTrackingBackend) Preview(ctx context.Context, limit int) (store.QueryResult, error) {
+	p.previewCalls++
+	return p.Backend.Preview(ctx, limit)
+}
+
+func (p *previewTrackingBackend) Query(ctx context.Context, query string, sort sorter.SortSpec, limit, offset int) (store.QueryResult, error) {
+	p.queryCalls++
+	return p.Backend.Query(ctx, query, sort, limit, offset)
+}
+
 func newTestApp(t *testing.T, sys *mockSystemAdapter) *App {
 	t.Helper()
 
@@ -511,10 +528,11 @@ func TestFetchWarmStartPreviewReturnsEntries(t *testing.T) {
 	}
 }
 
-func TestFetchWarmStartPreviewUsesConfiguredSort(t *testing.T) {
+func TestFetchWarmStartPreviewUsesCheapPreviewPath(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
-	a.sortSpec = sorter.SortSpec{Column: sorter.SortName, Direction: sorter.Desc}
+	backend := &previewTrackingBackend{Backend: a.store}
+	a.store = backend
 
 	now := time.Now()
 	if err := a.store.UpsertBatch(context.Background(), now.UnixNano(), []model.Entry{
@@ -531,8 +549,11 @@ func TestFetchWarmStartPreviewUsesConfiguredSort(t *testing.T) {
 	if len(entries) < 2 {
 		t.Fatalf("expected at least 2 preview entries, got %d", len(entries))
 	}
-	if entries[0].Name != "z.txt" {
-		t.Fatalf("expected descending name order in preview, first=%q", entries[0].Name)
+	if backend.previewCalls != 1 {
+		t.Fatalf("expected warm start to use preview once, got %d", backend.previewCalls)
+	}
+	if backend.queryCalls != 0 {
+		t.Fatalf("expected warm start preview not to run full query, got %d query calls", backend.queryCalls)
 	}
 }
 

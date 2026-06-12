@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	"omnia-search-tui/internal/config"
@@ -125,17 +126,37 @@ func (a *App) Close() error {
 }
 
 func (a *App) Run(ctx context.Context) error {
-	go a.queueWarmStartPreview(ctx)
-	a.requestRefreshAsync(a.query, a.sortSpec)
-	a.startStatusLoop(ctx)
 	a.tui.SetRoot(a.pages, true)
 	a.tui.SetFocus(a.input)
+
+	var startOnce sync.Once
+	a.tui.SetAfterDrawFunc(func(_ tcell.Screen) {
+		startOnce.Do(func() {
+			go a.startInitialRefresh(ctx)
+		})
+	})
+
+	a.startStatusLoop(ctx)
 	return a.tui.Run()
+}
+
+func (a *App) startInitialRefresh(ctx context.Context) {
+	a.queueWarmStartPreview(ctx)
+	if ctx.Err() != nil {
+		return
+	}
+	if strings.TrimSpace(a.query) != "" {
+		return
+	}
+	a.requestRefreshAsync(a.query, a.sortSpec)
 }
 
 func (a *App) queueWarmStartPreview(ctx context.Context) {
 	entries, total, err := a.fetchWarmStartPreview(ctx)
 	if err != nil || len(entries) == 0 {
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 	a.tui.QueueUpdateDraw(func() {
@@ -153,7 +174,7 @@ func (a *App) fetchWarmStartPreview(ctx context.Context) ([]model.Entry, int, er
 	previewCtx, cancel := context.WithTimeout(ctx, warmStartPreviewTimeout)
 	defer cancel()
 
-	res, err := a.storeQuery(previewCtx, "", a.sortSpec, warmStartPreviewLimit, 0)
+	res, err := a.storePreview(previewCtx, warmStartPreviewLimit)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -176,6 +197,15 @@ func (a *App) storeQuery(ctx context.Context, query string, sortSpec sorter.Sort
 		return store.QueryResult{}, fmt.Errorf("store is closed")
 	}
 	return a.store.Query(ctx, query, sortSpec, limit, offset)
+}
+
+func (a *App) storePreview(ctx context.Context, limit int) (store.QueryResult, error) {
+	a.storeMu.RLock()
+	defer a.storeMu.RUnlock()
+	if a.store == nil {
+		return store.QueryResult{}, fmt.Errorf("store is closed")
+	}
+	return a.store.Preview(ctx, limit)
 }
 
 func (a *App) storeDeletePathPrefix(ctx context.Context, path string) error {

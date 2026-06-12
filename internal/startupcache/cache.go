@@ -57,12 +57,13 @@ func Load(path string, sortSpec sorter.SortSpec, limit int) (store.QueryResult, 
 	if len(entries) > limit {
 		entries = entries[:limit]
 	}
-	if cache.Version != version ||
+	if cache.Version < 1 ||
+		cache.Version > version ||
 		cache.SortColumn != sortSpec.Column ||
 		cache.SortDirection != sortSpec.Direction ||
 		cache.Limit != limit ||
 		len(entries) == 0 ||
-		!isSorted(entries, sortSpec) {
+		!IsSorted(entries, sortSpec) {
 		return store.QueryResult{}, false, nil
 	}
 
@@ -109,16 +110,16 @@ func Save(path string, sortSpec sorter.SortSpec, limit int, result store.QueryRe
 	return os.Rename(tmp, path)
 }
 
-func isSorted(entries []model.Entry, sortSpec sorter.SortSpec) bool {
+func IsSorted(entries []model.Entry, sortSpec sorter.SortSpec) bool {
 	for i := 1; i < len(entries); i++ {
-		if compareEntries(entries[i-1], entries[i], sortSpec) > 0 {
+		if CompareEntries(entries[i-1], entries[i], sortSpec) > 0 {
 			return false
 		}
 	}
 	return true
 }
 
-func compareEntries(a, b model.Entry, sortSpec sorter.SortSpec) int {
+func CompareEntries(a, b model.Entry, sortSpec sorter.SortSpec) int {
 	cmp := 0
 	switch sortSpec.Column {
 	case sorter.SortPath:

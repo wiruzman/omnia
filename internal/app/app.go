@@ -174,7 +174,7 @@ func (a *App) fetchWarmStartPreview(ctx context.Context) ([]model.Entry, int, er
 	previewCtx, cancel := context.WithTimeout(ctx, warmStartPreviewTimeout)
 	defer cancel()
 
-	res, err := a.storePreview(previewCtx, warmStartPreviewLimit)
+	res, err := a.storePreview(previewCtx, a.sortSpec, warmStartPreviewLimit)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -199,13 +199,13 @@ func (a *App) storeQuery(ctx context.Context, query string, sortSpec sorter.Sort
 	return a.store.Query(ctx, query, sortSpec, limit, offset)
 }
 
-func (a *App) storePreview(ctx context.Context, limit int) (store.QueryResult, error) {
+func (a *App) storePreview(ctx context.Context, sortSpec sorter.SortSpec, limit int) (store.QueryResult, error) {
 	a.storeMu.RLock()
 	defer a.storeMu.RUnlock()
 	if a.store == nil {
 		return store.QueryResult{}, fmt.Errorf("store is closed")
 	}
-	return a.store.Preview(ctx, limit)
+	return a.store.Preview(ctx, sortSpec, limit)
 }
 
 func (a *App) storeDeletePathPrefix(ctx context.Context, path string) error {

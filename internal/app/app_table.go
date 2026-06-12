@@ -10,14 +10,13 @@ import (
 	"omnia-search-tui/internal/sorter"
 )
 
-func (a *App) renderHeader(startCol int) {
+func (a *App) renderHeader(cols []int) {
 	headers := []string{"Name", "Path", "Type", "Size", "Created", "Modified"}
 	widths := []int{40, 80, 10, 12, 19, 19}
-	for p := 0; p+startCol < len(headers); p++ {
-		c := startCol + p
+	for p, c := range cols {
 		h := headers[c]
 		expansion := 0
-		if c == 5 {
+		if p == len(cols)-1 {
 			expansion = 1
 		}
 		cell := tview.NewTableCell(fmt.Sprintf("[::b]%s", h)).
@@ -30,19 +29,18 @@ func (a *App) renderHeader(startCol int) {
 }
 
 func (a *App) renderTable() {
-	startCol := a.visibleStartForSelection()
-	a.visibleStartCol = startCol
+	cols := a.visibleColumns()
+	a.visibleStartCol = 0
 	widths := []int{40, 80, 10, 12, 19, 19}
 
 	a.table.Clear()
-	a.renderHeader(startCol)
+	a.renderHeader(cols)
 	for i, e := range a.entries {
 		row := i + 1
-		for p := 0; p+startCol <= 5; p++ {
-			c := startCol + p
+		for p, c := range cols {
 			text := a.columnText(e, c)
 			expansion := 0
-			if c == 5 {
+			if p == len(cols)-1 {
 				expansion = 1
 			}
 			cell := tview.NewTableCell(text).
@@ -62,14 +60,7 @@ func (a *App) renderTable() {
 		if a.selectedCol > 5 {
 			a.selectedCol = 5
 		}
-		physicalCol := a.selectedCol - startCol
-		if physicalCol < 0 {
-			physicalCol = 0
-		}
-		maxPhysicalCol := 5 - startCol
-		if physicalCol > maxPhysicalCol {
-			physicalCol = maxPhysicalCol
-		}
+		physicalCol := physicalColumnForLogical(cols, a.selectedCol)
 		a.table.Select(a.selected+1, physicalCol)
 	}
 }
@@ -91,17 +82,34 @@ func (a *App) moveSelectionHorizontal(delta int) {
 	a.renderTable()
 }
 
-func (a *App) visibleStartForSelection() int {
-	if a.selectedCol <= 0 {
+func (a *App) visibleColumns() []int {
+	if a.selectedCol <= 2 {
+		return []int{0, 1, 2, 3, 4, 5}
+	}
+	cols := []int{0, a.selectedCol}
+	for _, c := range []int{1, 2, 3, 4, 5} {
+		if c != a.selectedCol {
+			cols = append(cols, c)
+		}
+	}
+	return cols
+}
+
+func (a *App) logicalColumnForPhysical(physicalCol int) int {
+	cols := a.visibleColumns()
+	if physicalCol < 0 || physicalCol >= len(cols) {
 		return 0
 	}
-	if a.selectedCol <= 3 {
-		return 1
+	return cols[physicalCol]
+}
+
+func physicalColumnForLogical(cols []int, logicalCol int) int {
+	for i, c := range cols {
+		if c == logicalCol {
+			return i
+		}
 	}
-	if a.selectedCol <= 4 {
-		return 2
-	}
-	return 3
+	return 0
 }
 
 func sortColumnIndex(col sorter.Column) int {

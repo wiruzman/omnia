@@ -379,7 +379,8 @@ func TestEndKeyKeepsHighlightedColumn(t *testing.T) {
 
 	a.selectedCol = 2
 	a.renderTable()
-	a.table.Select(1, 1)
+	typePhysicalCol := physicalColumnForLogical(a.visibleColumns(), 2)
+	a.table.Select(1, typePhysicalCol)
 
 	a.captureTableKeys(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
 
@@ -387,8 +388,8 @@ func TestEndKeyKeepsHighlightedColumn(t *testing.T) {
 	if row != len(entries) {
 		t.Fatalf("expected END to move to last row %d, got %d", len(entries), row)
 	}
-	if col != 1 {
-		t.Fatalf("expected END to keep highlighted column 1, got %d", col)
+	if col != typePhysicalCol {
+		t.Fatalf("expected END to keep highlighted column %d, got %d", typePhysicalCol, col)
 	}
 	if a.selected != len(entries)-1 {
 		t.Fatalf("expected selected index %d, got %d", len(entries)-1, a.selected)
@@ -561,6 +562,34 @@ func TestSortColumnIndex(t *testing.T) {
 		if got := sortColumnIndex(tc.column); got != tc.want {
 			t.Fatalf("sortColumnIndex(%s) = %d, want %d", tc.column, got, tc.want)
 		}
+	}
+}
+
+func TestRenderTableShowsActiveSortColumnNextToName(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.selectedCol = sortColumnIndex(sorter.SortSize)
+
+	now := time.Now()
+	a.applyResults([]model.Entry{{
+		Path:       "/tmp/large.txt",
+		Name:       "large.txt",
+		ParentPath: "/tmp",
+		RootPath:   "/tmp",
+		Type:       model.TypeFile,
+		Size:       90,
+		CreatedAt:  now,
+		ModifiedAt: now,
+	}}, 1)
+
+	if got := a.table.GetCell(0, 0).Text; !strings.Contains(got, "Name") {
+		t.Fatalf("expected first visible column to be Name, got %q", got)
+	}
+	if got := a.table.GetCell(0, 1).Text; !strings.Contains(got, "Size") {
+		t.Fatalf("expected active size sort column beside name, got %q", got)
+	}
+	if got := a.table.GetCell(1, 1).Text; got != "90 B" {
+		t.Fatalf("expected size value in second visible column, got %q", got)
 	}
 }
 

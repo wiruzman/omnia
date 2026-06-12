@@ -9,6 +9,8 @@ import (
 
 	"omnia-search-tui/internal/model"
 	"omnia-search-tui/internal/sorter"
+	"omnia-search-tui/internal/startupcache"
+	"omnia-search-tui/internal/store"
 )
 
 const (
@@ -140,6 +142,7 @@ func (a *App) refreshDataAsync(ctx context.Context, refreshID uint64, query stri
 	if refreshID != atomic.LoadUint64(&a.refreshID) {
 		return
 	}
+	a.cacheWarmStartResults(query, sortSpec, entries, total)
 	a.tui.QueueUpdateDraw(func() {
 		if refreshID != atomic.LoadUint64(&a.refreshID) {
 			return
@@ -162,6 +165,7 @@ func (a *App) refreshData(ctx context.Context) {
 		a.logger.Printf("query failed: %v", err)
 		return
 	}
+	a.cacheWarmStartResults(a.query, a.sortSpec, entries, total)
 	a.applyResults(entries, total)
 }
 
@@ -308,4 +312,23 @@ func (a *App) applyResults(entries []model.Entry, total int) {
 	a.renderTable()
 	a.setSearchState(searchStateDone)
 	a.updateStatus()
+}
+
+func (a *App) cacheWarmStartResults(query string, sortSpec sorter.SortSpec, entries []model.Entry, total int) {
+	if strings.TrimSpace(query) != "" || len(entries) == 0 {
+		return
+	}
+	limit := startupcache.EffectiveLimit(a.cfg.MaxResults)
+	if limit <= 0 {
+		return
+	}
+	result := store.QueryResult{
+		Entries: append([]model.Entry(nil), entries...),
+		Total:   total,
+	}
+	go func() {
+		if err := startupcache.Save(startupcache.Path(a.cfg), sortSpec, limit, result); err != nil {
+			a.logger.Printf("save startup cache failed: %v", err)
+		}
+	}()
 }

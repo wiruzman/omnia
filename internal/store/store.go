@@ -137,8 +137,8 @@ func (s *Store) CountByRoots(ctx context.Context, roots []string) (map[string]in
 	return counts, nil
 }
 
-func (s *Store) Preview(ctx context.Context, limit int) (QueryResult, error) {
-	entries, total, err := s.searchEntries(ctx, bleve.NewMatchAllQuery(), nil, limit, 0)
+func (s *Store) Preview(ctx context.Context, sort sorter.SortSpec, limit int) (QueryResult, error) {
+	entries, total, err := s.searchEntries(ctx, bleve.NewMatchAllQuery(), sortToBleveFields(sort), limit, 0)
 	if err != nil {
 		return QueryResult{}, err
 	}

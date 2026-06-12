@@ -18,6 +18,8 @@ import (
 	"omnia-search-tui/internal/indexer"
 	"omnia-search-tui/internal/progress"
 	"omnia-search-tui/internal/scanner"
+	"omnia-search-tui/internal/sorter"
+	"omnia-search-tui/internal/startupcache"
 	"omnia-search-tui/internal/store"
 )
 
@@ -89,7 +91,7 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 
 	if !s.indexer.IsRunning() {
-		if err := s.publishReadonlySnapshot(); err != nil {
+		if err := s.publishReadonlySnapshot(ctx); err != nil {
 			s.logger.Printf("publish readonly snapshot failed: %v", err)
 		} else {
 			snapshotDirty = false
@@ -230,7 +232,7 @@ func (s *Service) Run(ctx context.Context) error {
 				s.logger.Printf("indexing finished | total_indexed=%d last_error=%s", total, idx.LastError)
 			}
 			if !idx.Running && snapshotDirty {
-				if err := s.publishReadonlySnapshot(); err != nil {
+				if err := s.publishReadonlySnapshot(ctx); err != nil {
 					s.logger.Printf("publish readonly snapshot failed: %v", err)
 				} else {
 					snapshotDirty = false
@@ -424,7 +426,7 @@ func (s *Service) readonlyIndexPath() string {
 	return s.cfg.IndexDBPath + ".readonly"
 }
 
-func (s *Service) publishReadonlySnapshot() error {
+func (s *Service) publishReadonlySnapshot(ctx context.Context) error {
 	const maxAttempts = 5
 	const baseDelay = 120 * time.Millisecond
 
@@ -432,6 +434,9 @@ func (s *Service) publishReadonlySnapshot() error {
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		err := s.publishReadonlySnapshotOnce()
 		if err == nil {
+			if err := s.publishStartupPreviewCache(ctx); err != nil {
+				s.logger.Printf("publish startup preview cache failed: %v", err)
+			}
 			return nil
 		}
 		lastErr = err
@@ -441,6 +446,19 @@ func (s *Service) publishReadonlySnapshot() error {
 		time.Sleep(time.Duration(attempt) * baseDelay)
 	}
 	return lastErr
+}
+
+func (s *Service) publishStartupPreviewCache(ctx context.Context) error {
+	limit := startupcache.EffectiveLimit(s.cfg.MaxResults)
+	sortSpec := sorter.SortSpec{
+		Column:    sorter.Column(s.cfg.SortColumn),
+		Direction: sorter.Direction(s.cfg.SortDirection),
+	}
+	res, err := s.store.Preview(ctx, sortSpec, limit)
+	if err != nil {
+		return err
+	}
+	return startupcache.Save(startupcache.Path(s.cfg), sortSpec, limit, res)
 }
 
 func (s *Service) publishReadonlySnapshotOnce() error {

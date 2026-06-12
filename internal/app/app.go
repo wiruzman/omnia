@@ -20,6 +20,7 @@ import (
 	"omnia-search-tui/internal/model"
 	"omnia-search-tui/internal/scanner"
 	"omnia-search-tui/internal/sorter"
+	"omnia-search-tui/internal/startupcache"
 	"omnia-search-tui/internal/store"
 )
 
@@ -65,9 +66,6 @@ type App struct {
 	lastSnapshotRefreshAttempt time.Time
 }
 
-const warmStartPreviewTimeout = 650 * time.Millisecond
-const warmStartPreviewLimit = 220
-
 func New() (*App, error) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -97,13 +95,14 @@ func New() (*App, error) {
 	idx := indexer.New(cfg, scan, st, logger)
 
 	a := &App{
-		cfg:      cfg,
-		store:    st,
-		indexer:  idx,
-		tui:      tview.NewApplication(),
-		sortSpec: sorter.SortSpec{Column: sorter.Column(cfg.SortColumn), Direction: sorter.Direction(cfg.SortDirection)},
-		logger:   logger,
-		system:   NewMacOSAdapter(),
+		cfg:         cfg,
+		store:       st,
+		indexer:     idx,
+		tui:         tview.NewApplication(),
+		sortSpec:    sorter.SortSpec{Column: sorter.Column(cfg.SortColumn), Direction: sorter.Direction(cfg.SortDirection)},
+		selectedCol: sortColumnIndex(sorter.Column(cfg.SortColumn)),
+		logger:      logger,
+		system:      NewMacOSAdapter(),
 	}
 	a.buildUI()
 	return a, nil
@@ -141,7 +140,7 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) startInitialRefresh(ctx context.Context) {
-	a.queueWarmStartPreview(ctx)
+	a.queueCachedWarmStart(ctx)
 	if ctx.Err() != nil {
 		return
 	}
@@ -151,9 +150,12 @@ func (a *App) startInitialRefresh(ctx context.Context) {
 	a.requestRefreshAsync(a.query, a.sortSpec)
 }
 
-func (a *App) queueWarmStartPreview(ctx context.Context) {
-	entries, total, err := a.fetchWarmStartPreview(ctx)
-	if err != nil || len(entries) == 0 {
+func (a *App) queueCachedWarmStart(ctx context.Context) {
+	res, ok, err := a.loadWarmStartCache()
+	if err != nil {
+		a.logger.Printf("load startup cache failed: %v", err)
+	}
+	if err != nil || !ok {
 		return
 	}
 	if ctx.Err() != nil {
@@ -163,22 +165,16 @@ func (a *App) queueWarmStartPreview(ctx context.Context) {
 		if strings.TrimSpace(a.query) != "" || len(a.entries) > 0 {
 			return
 		}
-		a.applyResults(entries, total)
+		a.applyResults(res.Entries, res.Total)
 	})
 }
 
-func (a *App) fetchWarmStartPreview(ctx context.Context) ([]model.Entry, int, error) {
+func (a *App) loadWarmStartCache() (store.QueryResult, bool, error) {
 	if strings.TrimSpace(a.query) != "" {
-		return nil, 0, nil
+		return store.QueryResult{}, false, nil
 	}
-	previewCtx, cancel := context.WithTimeout(ctx, warmStartPreviewTimeout)
-	defer cancel()
-
-	res, err := a.storePreview(previewCtx, a.sortSpec, warmStartPreviewLimit)
-	if err != nil {
-		return nil, 0, err
-	}
-	return res.Entries, res.Total, nil
+	limit := startupcache.EffectiveLimit(a.cfg.MaxResults)
+	return startupcache.Load(startupcache.Path(a.cfg), a.sortSpec, limit)
 }
 
 func (a *App) storeCount(ctx context.Context) (int, error) {
@@ -197,15 +193,6 @@ func (a *App) storeQuery(ctx context.Context, query string, sortSpec sorter.Sort
 		return store.QueryResult{}, fmt.Errorf("store is closed")
 	}
 	return a.store.Query(ctx, query, sortSpec, limit, offset)
-}
-
-func (a *App) storePreview(ctx context.Context, sortSpec sorter.SortSpec, limit int) (store.QueryResult, error) {
-	a.storeMu.RLock()
-	defer a.storeMu.RUnlock()
-	if a.store == nil {
-		return store.QueryResult{}, fmt.Errorf("store is closed")
-	}
-	return a.store.Preview(ctx, sortSpec, limit)
 }
 
 func (a *App) storeDeletePathPrefix(ctx context.Context, path string) error {

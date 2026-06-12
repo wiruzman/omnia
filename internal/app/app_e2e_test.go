@@ -20,6 +20,7 @@ import (
 	"omnia-search-tui/internal/model"
 	"omnia-search-tui/internal/scanner"
 	"omnia-search-tui/internal/sorter"
+	"omnia-search-tui/internal/startupcache"
 	"omnia-search-tui/internal/store"
 )
 
@@ -349,19 +350,26 @@ func TestE2ELiveTUISearchIsCappedAndResponsiveOnLargeIndex(t *testing.T) {
 func TestE2EStartupPreviewRendersBeforeFullRefreshCompletes(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
+	a.sortSpec = sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc}
+	a.selectedCol = sortColumnIndex(a.sortSpec.Column)
 
 	now := time.Now()
-	if err := a.store.UpsertBatch(context.Background(), now.UnixMicro(), []model.Entry{{
-		Path:       "/fixture/quick-preview.txt",
-		Name:       "quick-preview.txt",
-		ParentPath: "/fixture",
-		RootPath:   "/fixture",
-		Type:       model.TypeFile,
-		Size:       1,
-		CreatedAt:  now,
-		ModifiedAt: now,
-	}}); err != nil {
-		t.Fatalf("seed startup preview entry: %v", err)
+	cacheResult := store.QueryResult{
+		Entries: []model.Entry{{
+			Path:       "/fixture/quick-preview.txt",
+			Name:       "quick-preview.txt",
+			ParentPath: "/fixture",
+			RootPath:   "/fixture",
+			Type:       model.TypeFile,
+			Size:       90,
+			CreatedAt:  now,
+			ModifiedAt: now,
+		}},
+		Total: 1,
+	}
+	cacheLimit := startupcache.EffectiveLimit(a.cfg.MaxResults)
+	if err := startupcache.Save(startupcache.Path(a.cfg), a.sortSpec, cacheLimit, cacheResult); err != nil {
+		t.Fatalf("seed startup cache: %v", err)
 	}
 
 	backend := &blockingStartupBackend{
@@ -377,6 +385,9 @@ func TestE2EStartupPreviewRendersBeforeFullRefreshCompletes(t *testing.T) {
 	})
 
 	screen := startSimulatedTUI(t, a, 120, 25)
+	waitForScreenText(t, screen, "Size", 2*time.Second)
+	waitForScreenText(t, screen, "90 B", 2*time.Second)
+	waitForScreenText(t, screen, "quick-preview.txt", 2*time.Second)
 	waitForCondition(t, 2*time.Second, func() bool {
 		select {
 		case <-backend.queryStarted:
@@ -385,7 +396,6 @@ func TestE2EStartupPreviewRendersBeforeFullRefreshCompletes(t *testing.T) {
 			return false
 		}
 	}, "expected full startup refresh to start after preview")
-	waitForScreenText(t, screen, "quick-preview.txt", 2*time.Second)
 	releaseOnce.Do(func() {
 		close(backend.releaseQuery)
 	})

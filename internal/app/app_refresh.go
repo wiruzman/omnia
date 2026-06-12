@@ -297,7 +297,7 @@ func (a *App) applyResults(entries []model.Entry, total int) {
 		a.resetSelectionOnNextResults = false
 	} else if row, col := a.table.GetSelection(); row > 0 {
 		a.selected = row - 1
-		a.selectedCol = a.visibleStartCol + col
+		a.selectedCol = a.logicalColumnForPhysical(col)
 	}
 
 	a.entries = entries

@@ -17,8 +17,12 @@ import (
 	"omnia-search-tui/internal/model"
 	"omnia-search-tui/internal/progress"
 	"omnia-search-tui/internal/scanner"
+	"omnia-search-tui/internal/sorter"
+	"omnia-search-tui/internal/startupcache"
 	"omnia-search-tui/internal/store"
 )
+
+const startupCacheSaveInterval = time.Second
 
 type Status struct {
 	Running      bool
@@ -98,6 +102,38 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 			i.logger.Printf("resume state read failed: %v", err)
 		}
 
+		buildStartupCache := walkOptions.ResumeRoot == "" && walkOptions.ResumeAfterPath == ""
+		sortSpec := sorter.SortSpec{
+			Column:    sorter.Column(i.cfg.SortColumn),
+			Direction: sorter.Direction(i.cfg.SortDirection),
+		}
+		startupCacheLimit := startupcache.EffectiveLimit(i.cfg.MaxResults)
+		startupTop := startupcache.NewTop(sortSpec, startupCacheLimit)
+		lastStartupCacheSave := time.Now()
+		hasSavedStartupCache := false
+		emitted := int64(0)
+		saveStartupCache := func(force bool) {
+			if !buildStartupCache || startupTop.Len() == 0 {
+				return
+			}
+			now := time.Now()
+			if !force {
+				if hasSavedStartupCache && now.Sub(lastStartupCacheSave) < startupCacheSaveInterval {
+					return
+				}
+				if !hasSavedStartupCache && startupTop.Len() < startupCacheLimit && now.Sub(lastStartupCacheSave) < startupCacheSaveInterval {
+					return
+				}
+			}
+			result := startupTop.Result(int(emitted))
+			if err := startupcache.Save(startupcache.Path(i.cfg), sortSpec, startupCacheLimit, result); err != nil {
+				i.logger.Printf("save startup cache during reindex failed: %v", err)
+				return
+			}
+			lastStartupCacheSave = now
+			hasSavedStartupCache = true
+		}
+
 		if err := i.store.BeginScan(runCtx, scanID); err != nil {
 			i.finishWithError(err)
 			return
@@ -128,6 +164,11 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 		emit := func(e model.Entry) error {
 			if err := runCtx.Err(); err != nil {
 				return err
+			}
+			if buildStartupCache {
+				emitted++
+				startupTop.Add(e)
+				saveStartupCache(false)
 			}
 			batch = append(batch, e)
 			if len(batch) >= i.cfg.ScanBatchSize {
@@ -196,6 +237,7 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 				return
 			}
 		}
+		saveStartupCache(true)
 		if err := i.store.CleanupStale(runCtx, scanID, i.cfg.IncludePaths); err != nil {
 			i.finishWithError(err)
 			return

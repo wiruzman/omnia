@@ -275,7 +275,7 @@ func (s *Store) searchEntries(ctx context.Context, q querypkg.Query, sortFields 
 }
 
 func (s *Store) UpsertEntry(ctx context.Context, e model.Entry) error {
-	return s.UpsertBatch(ctx, time.Now().UnixNano(), []model.Entry{e})
+	return s.UpsertBatch(ctx, time.Now().UnixMicro(), []model.Entry{e})
 }
 
 func (s *Store) DeletePath(ctx context.Context, path string) error {

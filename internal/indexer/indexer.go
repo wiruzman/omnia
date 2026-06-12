@@ -80,12 +80,16 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 		}()
 
 		scanID := newScanID()
-		walkOptions := scanner.WalkOptions{}
+		walkOptions := scanner.WalkOptions{
+			ThrottleEvery: i.cfg.ScanThrottleEvery,
+			ThrottleDelay: time.Duration(i.cfg.ScanThrottleMs) * time.Millisecond,
+		}
 		resume, err := daemonstate.ReadResumeState(i.resumeAt)
 		if err == nil && resume.ScanID > 0 {
 			if isExactBleveNumericInt(resume.ScanID) {
 				scanID = resume.ScanID
-				walkOptions = scanner.WalkOptions{ResumeRoot: resume.Root, ResumeAfterPath: resume.CurrentPath}
+				walkOptions.ResumeRoot = resume.Root
+				walkOptions.ResumeAfterPath = resume.CurrentPath
 				i.logger.Printf("resuming reindex | scan_id=%d root=%s path=%s", scanID, resume.Root, resume.CurrentPath)
 			} else {
 				i.logger.Printf("ignoring imprecise resume scan id and restarting reindex | scan_id=%d root=%s path=%s", resume.ScanID, resume.Root, resume.CurrentPath)

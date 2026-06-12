@@ -30,6 +30,28 @@ type meteredBackend struct {
 	batches []int
 }
 
+type blockingStartupBackend struct {
+	store.Backend
+
+	queryStarted     chan struct{}
+	releaseQuery     chan struct{}
+	queryStartedOnce sync.Once
+}
+
+func (b *blockingStartupBackend) Query(ctx context.Context, query string, sort sorter.SortSpec, limit, offset int) (store.QueryResult, error) {
+	if strings.TrimSpace(query) == "" {
+		b.queryStartedOnce.Do(func() {
+			close(b.queryStarted)
+		})
+		select {
+		case <-b.releaseQuery:
+		case <-ctx.Done():
+			return store.QueryResult{}, ctx.Err()
+		}
+	}
+	return b.Backend.Query(ctx, query, sort, limit, offset)
+}
+
 func (m *meteredBackend) UpsertBatch(ctx context.Context, scanID int64, batch []model.Entry) error {
 	m.mu.Lock()
 	m.batches = append(m.batches, len(batch))
@@ -322,6 +344,51 @@ func TestE2ELiveTUISearchIsCappedAndResponsiveOnLargeIndex(t *testing.T) {
 	if got := a.searchStateText(); got != "finished" {
 		t.Fatalf("expected finished search state, got %q", got)
 	}
+}
+
+func TestE2EStartupPreviewRendersBeforeFullRefreshCompletes(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+
+	now := time.Now()
+	if err := a.store.UpsertBatch(context.Background(), now.UnixMicro(), []model.Entry{{
+		Path:       "/fixture/quick-preview.txt",
+		Name:       "quick-preview.txt",
+		ParentPath: "/fixture",
+		RootPath:   "/fixture",
+		Type:       model.TypeFile,
+		Size:       1,
+		CreatedAt:  now,
+		ModifiedAt: now,
+	}}); err != nil {
+		t.Fatalf("seed startup preview entry: %v", err)
+	}
+
+	backend := &blockingStartupBackend{
+		Backend:      a.store,
+		queryStarted: make(chan struct{}),
+		releaseQuery: make(chan struct{}),
+	}
+	a.store = backend
+
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() {
+		close(backend.releaseQuery)
+	})
+
+	screen := startSimulatedTUI(t, a, 120, 25)
+	waitForCondition(t, 2*time.Second, func() bool {
+		select {
+		case <-backend.queryStarted:
+			return true
+		default:
+			return false
+		}
+	}, "expected full startup refresh to start after preview")
+	waitForScreenText(t, screen, "quick-preview.txt", 2*time.Second)
+	releaseOnce.Do(func() {
+		close(backend.releaseQuery)
+	})
 }
 
 func TestE2ESimulatedTerminalTUISearchRendersAndOpensResult(t *testing.T) {

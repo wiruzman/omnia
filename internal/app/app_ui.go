@@ -195,11 +195,13 @@ func (a *App) captureTableKeys(event *tcell.EventKey) *tcell.EventKey {
 			return nil
 		case 's':
 			a.sortSpec = a.sortSpec.NextColumn()
+			a.selectedCol = sortColumnIndex(a.sortSpec.Column)
 			a.persistSortSpec()
 			a.refreshData(context.Background())
 			return nil
 		case 'S':
 			a.sortSpec = a.sortSpec.ToggleDirection()
+			a.selectedCol = sortColumnIndex(a.sortSpec.Column)
 			a.persistSortSpec()
 			a.refreshData(context.Background())
 			return nil

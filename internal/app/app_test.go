@@ -21,6 +21,7 @@ import (
 	"omnia-search-tui/internal/progress"
 	"omnia-search-tui/internal/scanner"
 	"omnia-search-tui/internal/sorter"
+	"omnia-search-tui/internal/startupcache"
 	"omnia-search-tui/internal/store"
 )
 
@@ -50,25 +51,6 @@ func (m *mockSystemAdapter) CopyToClipboard(text string) error {
 func (m *mockSystemAdapter) MoveToTrash(path string) error {
 	m.trashCalls = append(m.trashCalls, path)
 	return m.trashErr
-}
-
-type previewTrackingBackend struct {
-	store.Backend
-
-	previewCalls int
-	queryCalls   int
-	previewSort  sorter.SortSpec
-}
-
-func (p *previewTrackingBackend) Preview(ctx context.Context, sort sorter.SortSpec, limit int) (store.QueryResult, error) {
-	p.previewCalls++
-	p.previewSort = sort
-	return p.Backend.Preview(ctx, sort, limit)
-}
-
-func (p *previewTrackingBackend) Query(ctx context.Context, query string, sort sorter.SortSpec, limit, offset int) (store.QueryResult, error) {
-	p.queryCalls++
-	return p.Backend.Query(ctx, query, sort, limit, offset)
 }
 
 func newTestApp(t *testing.T, sys *mockSystemAdapter) *App {
@@ -362,6 +344,27 @@ func TestApplyResultsResetsSelectionAfterClear(t *testing.T) {
 	}
 }
 
+func TestSortKeyMovesSelectedColumnToSortColumn(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+
+	a.captureTableKeys(tcell.NewEventKey(tcell.KeyRune, 's', tcell.ModNone))
+	if a.sortSpec.Column != sorter.SortPath {
+		t.Fatalf("expected sort column path after first sort key, got %s", a.sortSpec.Column)
+	}
+	if a.selectedCol != sortColumnIndex(sorter.SortPath) {
+		t.Fatalf("expected selected column to follow path sort, got %d", a.selectedCol)
+	}
+
+	a.captureTableKeys(tcell.NewEventKey(tcell.KeyRune, 's', tcell.ModNone))
+	if a.sortSpec.Column != sorter.SortSize {
+		t.Fatalf("expected sort column size after second sort key, got %s", a.sortSpec.Column)
+	}
+	if a.selectedCol != sortColumnIndex(sorter.SortSize) {
+		t.Fatalf("expected selected column to follow size sort, got %d", a.selectedCol)
+	}
+}
+
 func TestEndKeyKeepsHighlightedColumn(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
@@ -509,60 +512,55 @@ func TestRKeyClearsFreshAndTriggerWhenStopping(t *testing.T) {
 	}
 }
 
-func TestFetchWarmStartPreviewReturnsEntries(t *testing.T) {
-	sys := &mockSystemAdapter{}
-	a := newTestApp(t, sys)
-
-	now := time.Now()
-	if err := a.store.UpsertBatch(context.Background(), now.UnixNano(), []model.Entry{
-		{Path: "/tmp/z.txt", Name: "z.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, CreatedAt: now, ModifiedAt: now},
-		{Path: "/tmp/a.txt", Name: "a.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, CreatedAt: now, ModifiedAt: now},
-	}); err != nil {
-		t.Fatalf("seed entries: %v", err)
-	}
-
-	entries, total, err := a.fetchWarmStartPreview(context.Background())
-	if err != nil {
-		t.Fatalf("fetch warm start preview: %v", err)
-	}
-	if total == 0 || len(entries) == 0 {
-		t.Fatalf("expected preview entries, got total=%d len=%d", total, len(entries))
-	}
-}
-
-func TestFetchWarmStartPreviewUsesConfiguredSort(t *testing.T) {
+func TestLoadWarmStartCacheReturnsEntriesForConfiguredSort(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
 	a.sortSpec = sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc}
-	backend := &previewTrackingBackend{Backend: a.store}
-	a.store = backend
 
 	now := time.Now()
-	if err := a.store.UpsertBatch(context.Background(), now.UnixNano(), []model.Entry{
-		{Path: "/tmp/small.txt", Name: "small.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, Size: 10, CreatedAt: now, ModifiedAt: now},
-		{Path: "/tmp/large.txt", Name: "large.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, Size: 90, CreatedAt: now, ModifiedAt: now},
-	}); err != nil {
-		t.Fatalf("seed entries: %v", err)
+	res := store.QueryResult{
+		Entries: []model.Entry{
+			{Path: "/tmp/large.txt", Name: "large.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, Size: 90, CreatedAt: now, ModifiedAt: now},
+			{Path: "/tmp/small.txt", Name: "small.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, Size: 10, CreatedAt: now, ModifiedAt: now},
+		},
+		Total: 2,
 	}
 
-	entries, _, err := a.fetchWarmStartPreview(context.Background())
+	limit := startupcache.EffectiveLimit(a.cfg.MaxResults)
+	if err := startupcache.Save(startupcache.Path(a.cfg), a.sortSpec, limit, res); err != nil {
+		t.Fatalf("save startup cache: %v", err)
+	}
+
+	loaded, ok, err := a.loadWarmStartCache()
 	if err != nil {
-		t.Fatalf("fetch warm start preview: %v", err)
+		t.Fatalf("load warm start cache: %v", err)
 	}
-	if len(entries) < 2 {
-		t.Fatalf("expected at least 2 preview entries, got %d", len(entries))
+	if !ok {
+		t.Fatal("expected startup cache to load")
 	}
-	if entries[0].Name != "large.txt" {
-		t.Fatalf("expected size DESC preview to start with largest file, got %q", entries[0].Name)
+	if loaded.Total != 2 || len(loaded.Entries) != 2 {
+		t.Fatalf("expected cached entries, got total=%d len=%d", loaded.Total, len(loaded.Entries))
 	}
-	if backend.previewCalls != 1 {
-		t.Fatalf("expected warm start to use preview once, got %d", backend.previewCalls)
+	if loaded.Entries[0].Name != "large.txt" {
+		t.Fatalf("expected cached size DESC order, first=%q", loaded.Entries[0].Name)
 	}
-	if backend.previewSort != a.sortSpec {
-		t.Fatalf("expected preview sort %+v, got %+v", a.sortSpec, backend.previewSort)
+}
+
+func TestSortColumnIndex(t *testing.T) {
+	cases := []struct {
+		column sorter.Column
+		want   int
+	}{
+		{column: sorter.SortName, want: 0},
+		{column: sorter.SortPath, want: 1},
+		{column: sorter.SortSize, want: 3},
+		{column: sorter.SortCreated, want: 4},
+		{column: sorter.SortModified, want: 5},
 	}
-	if backend.queryCalls != 0 {
-		t.Fatalf("expected warm start preview not to run full query, got %d query calls", backend.queryCalls)
+	for _, tc := range cases {
+		if got := sortColumnIndex(tc.column); got != tc.want {
+			t.Fatalf("sortColumnIndex(%s) = %d, want %d", tc.column, got, tc.want)
+		}
 	}
 }
 

@@ -1,7 +1,10 @@
 package daemon
 
 import (
+	"context"
 	"errors"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,7 +12,11 @@ import (
 
 	"omnia-search-tui/internal/config"
 	"omnia-search-tui/internal/daemonstate"
+	"omnia-search-tui/internal/model"
 	"omnia-search-tui/internal/progress"
+	"omnia-search-tui/internal/sorter"
+	"omnia-search-tui/internal/startupcache"
+	"omnia-search-tui/internal/store"
 )
 
 func TestRootForPathPrefersMostSpecificRoot(t *testing.T) {
@@ -156,5 +163,50 @@ func TestShouldRefreshIndexedTotal(t *testing.T) {
 				t.Fatalf("shouldRefreshIndexedTotal(indexing=%v needsRecount=%v) = %v, want %v", tc.indexing, tc.needsRecount, got, tc.wantShouldTick)
 			}
 		})
+	}
+}
+
+func TestPublishStartupPreviewCacheUsesConfiguredSort(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "index.bleve"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	cfg := config.Config{
+		DaemonDir:     t.TempDir(),
+		MaxResults:    400,
+		SortColumn:    string(sorter.SortSize),
+		SortDirection: string(sorter.Desc),
+	}
+	svc := &Service{
+		cfg:    cfg,
+		store:  st,
+		logger: log.New(io.Discard, "", 0),
+	}
+
+	now := time.Now()
+	if err := st.UpsertBatch(ctx, now.UnixMicro(), []model.Entry{
+		{Path: "/tmp/small.txt", Name: "small.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, Size: 10, CreatedAt: now, ModifiedAt: now},
+		{Path: "/tmp/large.txt", Name: "large.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, Size: 90, CreatedAt: now, ModifiedAt: now},
+	}); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	if err := svc.publishStartupPreviewCache(ctx); err != nil {
+		t.Fatalf("publish startup cache: %v", err)
+	}
+
+	sortSpec := sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc}
+	res, ok, err := startupcache.Load(startupcache.Path(cfg), sortSpec, startupcache.EffectiveLimit(cfg.MaxResults))
+	if err != nil {
+		t.Fatalf("load startup cache: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected startup cache to load")
+	}
+	if len(res.Entries) != 2 || res.Entries[0].Name != "large.txt" {
+		t.Fatalf("expected size DESC cache, got %+v", res.Entries)
 	}
 }

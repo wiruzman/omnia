@@ -60,6 +60,31 @@ func TestLoadRejectsMismatchedSort(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsUnsortedEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "startup-preview.json")
+	sortSpec := sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc}
+	now := time.Now()
+	result := store.QueryResult{
+		Entries: []model.Entry{
+			{Path: "/tmp/small.txt", Name: "small.txt", Size: 10, CreatedAt: now, ModifiedAt: now},
+			{Path: "/tmp/large.txt", Name: "large.txt", Size: 90, CreatedAt: now, ModifiedAt: now},
+		},
+		Total: 2,
+	}
+
+	if err := Save(path, sortSpec, 400, result); err != nil {
+		t.Fatalf("save startup cache: %v", err)
+	}
+
+	_, ok, err := Load(path, sortSpec, 400)
+	if err != nil {
+		t.Fatalf("load startup cache: %v", err)
+	}
+	if ok {
+		t.Fatal("expected unsorted cache to be ignored")
+	}
+}
+
 func TestEffectiveLimitCapsLargeResultSets(t *testing.T) {
 	if got := EffectiveLimit(5000); got != 400 {
 		t.Fatalf("expected large max_results to cap at 400, got %d", got)

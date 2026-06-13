@@ -351,7 +351,8 @@ func TestE2EStartupPreviewRendersBeforeFullRefreshCompletes(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
 	a.sortSpec = sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc}
-	a.selectedCol = sortColumnIndex(a.sortSpec.Column)
+	a.selectedCol = 0
+	a.visiblePriorityCol = sortColumnIndex(a.sortSpec.Column)
 
 	now := time.Now()
 	cacheResult := store.QueryResult{

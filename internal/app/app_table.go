@@ -14,6 +14,7 @@ var tableHeaders = [...]string{"Name", "Path", "Type", "Size", "Created", "Modif
 var tableColumnMaxWidths = [...]int{40, 80, 10, 12, 19, 19}
 
 func (a *App) renderHeader(cols []int) {
+	selectedCol := clampColumnIndex(a.selectedCol)
 	for p, c := range cols {
 		h := tableHeaders[c]
 		expansion := 0
@@ -24,6 +25,9 @@ func (a *App) renderHeader(cols []int) {
 			SetSelectable(false).
 			SetBackgroundColor(tcell.ColorDefault).
 			SetExpansion(expansion)
+		if c == selectedCol {
+			cell.SetAttributes(tcell.AttrBold | tcell.AttrUnderline)
+		}
 		cell.SetMaxWidth(tableColumnMaxWidths[c])
 		a.table.SetCell(0, p, cell)
 	}
@@ -32,11 +36,8 @@ func (a *App) renderHeader(cols []int) {
 func (a *App) renderTable() {
 	a.selectedCol = clampColumnIndex(a.selectedCol)
 	cols := a.visibleColumns()
-	a.visibleCols = append(a.visibleCols[:0], cols...)
-	rowOffset, _ := a.table.GetOffset()
 
 	a.table.Clear()
-	a.table.SetOffset(rowOffset, 0)
 	a.renderHeader(cols)
 	for i, e := range a.entries {
 		row := i + 1
@@ -80,36 +81,11 @@ func (a *App) moveSelectionHorizontal(delta int) {
 }
 
 func (a *App) visibleColumns() []int {
-	width := a.tableInnerWidth()
-	if width <= 0 {
-		return allTableColumns()
-	}
-
-	selectedCol := clampColumnIndex(a.selectedCol)
-	startCol := clampColumnIndex(a.visibleStartCol)
-	if startCol > selectedCol {
-		startCol = selectedCol
-	}
-	if !a.columnsFit(startCol, selectedCol, width) {
-		a.visibleStartCol = selectedCol
-		return []int{selectedCol}
-	}
-
-	a.visibleStartCol = startCol
-	if startCol > 0 {
-		if startCol == selectedCol {
-			return []int{selectedCol}
-		}
-		return a.columnsFrom(startCol, width)
-	}
 	return allTableColumns()
 }
 
 func (a *App) logicalColumnForPhysical(physicalCol int) int {
-	cols := a.visibleCols
-	if len(cols) == 0 {
-		cols = allTableColumns()
-	}
+	cols := a.visibleColumns()
 	if physicalCol < 0 || physicalCol >= len(cols) {
 		return 0
 	}
@@ -123,71 +99,6 @@ func physicalColumnForLogical(cols []int, logicalCol int) int {
 		}
 	}
 	return 0
-}
-
-func (a *App) tableInnerWidth() int {
-	if a.table == nil {
-		return 0
-	}
-	_, _, rectWidth, rectHeight := a.table.GetRect()
-	// tview.NewBox defaults to 15x10 before Flex lays the table out.
-	if rectWidth == 15 && rectHeight == 10 {
-		return 0
-	}
-	_, _, width, _ := a.table.GetInnerRect()
-	return width
-}
-
-func (a *App) columnsFit(startCol, endCol, width int) bool {
-	used := 0
-	for col := startCol; col <= endCol; col++ {
-		next := a.columnDisplayWidth(col)
-		if col > startCol {
-			next++
-		}
-		if used+next > width {
-			return false
-		}
-		used += next
-	}
-	return true
-}
-
-func (a *App) columnsFrom(startCol, width int) []int {
-	cols := make([]int, 0, len(tableHeaders)-startCol)
-	used := 0
-	for col := startCol; col < len(tableHeaders); col++ {
-		next := a.columnDisplayWidth(col)
-		if len(cols) > 0 {
-			next++
-		}
-		if len(cols) > 0 && used+next > width {
-			break
-		}
-		cols = append(cols, col)
-		used += next
-		if used >= width {
-			break
-		}
-	}
-	if len(cols) == 0 {
-		return []int{clampColumnIndex(startCol)}
-	}
-	return cols
-}
-
-func (a *App) columnDisplayWidth(col int) int {
-	col = clampColumnIndex(col)
-	width := tview.TaggedStringWidth(tableHeaders[col])
-	for _, e := range a.entries {
-		if cellWidth := tview.TaggedStringWidth(a.columnText(e, col)); cellWidth > width {
-			width = cellWidth
-		}
-	}
-	if maxWidth := tableColumnMaxWidths[col]; maxWidth > 0 && width > maxWidth {
-		width = maxWidth
-	}
-	return width
 }
 
 func allTableColumns() []int {

@@ -155,9 +155,7 @@ func (a *App) buildUI() {
 		AddPage("progress", a.buildProgressPage(), true, false)
 	a.pages.SetBackgroundColor(tcell.ColorDefault)
 
-	cols := a.visibleColumns()
-	a.visibleCols = append(a.visibleCols[:0], cols...)
-	a.renderHeader(cols)
+	a.renderHeader(a.visibleColumns())
 	a.updateStatus()
 	a.renderProgressTable()
 }

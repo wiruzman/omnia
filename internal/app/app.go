@@ -41,8 +41,6 @@ type App struct {
 	entries                     []model.Entry
 	selected                    int
 	selectedCol                 int
-	visibleCols                 []int
-	visibleStartCol             int
 	query                       string
 	sortSpec                    sorter.SortSpec
 	resetSelectionOnNextResults bool

@@ -586,7 +586,7 @@ func TestEndKeyKeepsHighlightedColumn(t *testing.T) {
 	}
 }
 
-func TestKeyboardRightShowsClippedColumnFullWidth(t *testing.T) {
+func TestKeyboardRightScrollsViewportToWideColumn(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
 	a.table.SetRect(0, 0, 50, 5)
@@ -608,18 +608,15 @@ func TestKeyboardRightShowsClippedColumnFullWidth(t *testing.T) {
 	if a.selectedCol != 1 {
 		t.Fatalf("expected logical path column to be selected, got %d", a.selectedCol)
 	}
-	if a.visibleStartCol != 1 {
-		t.Fatalf("expected visible columns to start at path, got %d", a.visibleStartCol)
+	if got := a.table.GetColumnCount(); got != len(tableHeaders) {
+		t.Fatalf("expected all table columns to remain rendered, got %d", got)
 	}
-	if got := a.table.GetColumnCount(); got != 1 {
-		t.Fatalf("expected clipped selected column to render alone, got %d columns", got)
-	}
-	if got := a.table.GetCell(0, 0).Text; !strings.Contains(got, "Path") {
-		t.Fatalf("expected path header to render as the only visible column, got %q", got)
+	if got := a.table.GetCell(0, 1).Text; !strings.Contains(got, "Path") {
+		t.Fatalf("expected path header to remain at canonical column 1, got %q", got)
 	}
 	row, col := a.table.GetSelection()
-	if row != 1 || col != 0 {
-		t.Fatalf("expected selected path cell at physical column 0, got row=%d col=%d", row, col)
+	if row != 1 || col != 1 {
+		t.Fatalf("expected selected path cell at canonical column 1, got row=%d col=%d", row, col)
 	}
 	if got := a.logicalColumnForPhysical(col); got != 1 {
 		t.Fatalf("expected physical column %d to map to logical path column, got %d", col, got)
@@ -633,8 +630,12 @@ func TestKeyboardRightShowsClippedColumnFullWidth(t *testing.T) {
 	screen.SetSize(50, 5)
 	a.table.Draw(screen)
 	_, colAtRightEdge := a.table.CellAt(49, 1)
-	if colAtRightEdge != 0 {
+	if colAtRightEdge != 1 {
 		t.Fatalf("expected path column to fill right edge, got column %d", colAtRightEdge)
+	}
+	_, colOffset := a.table.GetOffset()
+	if colOffset != 1 {
+		t.Fatalf("expected viewport to scroll to path column offset 1, got %d", colOffset)
 	}
 }
 

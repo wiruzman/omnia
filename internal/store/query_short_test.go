@@ -43,6 +43,17 @@ func TestBleveQueryLongPlainTermMatchesPathContains(t *testing.T) {
 	assertLongPlainTermMatchesPathContains(t, ctx, st)
 }
 
+func TestBleveQueryPlainTermReturnsNameMatchesBeforePathContains(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	assertPlainTermReturnsNameMatchesBeforePathContains(t, ctx, st)
+}
+
 func TestBleveQueryPathTermSearchesPathContains(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
@@ -85,6 +96,17 @@ func TestSQLiteQueryLongPlainTermMatchesPathContains(t *testing.T) {
 	defer st.Close()
 
 	assertLongPlainTermMatchesPathContains(t, ctx, st)
+}
+
+func TestSQLiteQueryPlainTermReturnsNameMatchesBeforePathContains(t *testing.T) {
+	ctx := context.Background()
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	assertPlainTermReturnsNameMatchesBeforePathContains(t, ctx, st)
 }
 
 func TestSQLiteQueryPathTermSearchesPathContains(t *testing.T) {
@@ -220,6 +242,63 @@ func assertLongPlainTermMatchesPathContains(t *testing.T, ctx context.Context, s
 	}
 	if len(res.Entries) != 1 || res.Entries[0].Path != "/fixture/copenhagen/report.txt" {
 		t.Fatalf("expected long plain query to include path contains match, got %+v", res.Entries)
+	}
+}
+
+func assertPlainTermReturnsNameMatchesBeforePathContains(t *testing.T, ctx context.Context, st Backend) {
+	t.Helper()
+
+	now := time.Now()
+	batch := []model.Entry{
+		{
+			Path:       "/Applications/Install Logi Options+.app",
+			Name:       "Install Logi Options+.app",
+			ParentPath: "/Applications",
+			RootPath:   "/Applications",
+			Type:       model.TypeDirectory,
+			Size:       1,
+			CreatedAt:  now,
+			ModifiedAt: now,
+		},
+		{
+			Path:       "/Applications/LogiTune.app",
+			Name:       "LogiTune.app",
+			ParentPath: "/Applications",
+			RootPath:   "/Applications",
+			Type:       model.TypeDirectory,
+			Size:       1,
+			CreatedAt:  now,
+			ModifiedAt: now,
+		},
+		{
+			Path:       "/fixture/logi/archive/report.txt",
+			Name:       "report.txt",
+			ParentPath: "/fixture/logi/archive",
+			RootPath:   "/fixture",
+			Type:       model.TypeFile,
+			Size:       1,
+			CreatedAt:  now,
+			ModifiedAt: now,
+		},
+	}
+	if err := st.UpsertBatch(ctx, now.UnixMicro(), batch); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := st.Query(ctx, "logi", sorter.SortSpec{Column: sorter.SortName, Direction: sorter.Asc}, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := make(map[string]bool, len(res.Entries))
+	for _, entry := range res.Entries {
+		got[entry.Name] = true
+	}
+	if !got["Install Logi Options+.app"] || !got["LogiTune.app"] {
+		t.Fatalf("expected logi filename matches, got %+v", res.Entries)
+	}
+	if got["report.txt"] {
+		t.Fatalf("did not expect plain term with filename hits to wait for path-only contains match, got %+v", res.Entries)
 	}
 }
 

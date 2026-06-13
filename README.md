@@ -64,7 +64,7 @@ For non-empty queries, Omnia prioritizes cheaper lookups first to keep typing re
 
 - Plain filename terms: prefix match first, then filename contains for terms of at least 3 characters.
 - Short plain terms: 1-2 characters stay prefix-only; 3 characters search filenames but skip broad path contains.
-- Longer plain terms: filename matches first, then path contains.
+- Longer plain terms: filename matches first; path contains only runs when filename matching finds nothing.
 - Slash/path-like terms: path prefix or path contains, skipping filename scans.
 - Multi-word terms: exact phrase contains first, then all-term matching so separated words can still match.
 

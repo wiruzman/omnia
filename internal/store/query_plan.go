@@ -35,9 +35,12 @@ func (p queryPlan) allowNameContains() bool {
 	return !p.pathLike && runeLen(p.query) >= minContainsRunes
 }
 
-func (p queryPlan) allowPathContains() bool {
+func (p queryPlan) allowPathContains(currentMatches int) bool {
 	if p.pathLike {
 		return true
+	}
+	if currentMatches > 0 {
+		return false
 	}
 	return runeLen(p.query) >= minBroadPathRunes
 }

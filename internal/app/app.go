@@ -41,7 +41,6 @@ type App struct {
 	entries                     []model.Entry
 	selected                    int
 	selectedCol                 int
-	visiblePriorityCol          int
 	visibleStartCol             int
 	query                       string
 	sortSpec                    sorter.SortSpec
@@ -95,17 +94,15 @@ func New() (*App, error) {
 	scan := scanner.New(cfg.ExcludeGlobs)
 	idx := indexer.New(cfg, scan, st, logger)
 
-	sortSpec := sorter.SortSpec{Column: sorter.Column(cfg.SortColumn), Direction: sorter.Direction(cfg.SortDirection)}
 	a := &App{
-		cfg:                cfg,
-		store:              st,
-		indexer:            idx,
-		tui:                tview.NewApplication(),
-		sortSpec:           sortSpec,
-		selectedCol:        0,
-		visiblePriorityCol: sortColumnIndex(sortSpec.Column),
-		logger:             logger,
-		system:             NewMacOSAdapter(),
+		cfg:         cfg,
+		store:       st,
+		indexer:     idx,
+		tui:         tview.NewApplication(),
+		sortSpec:    sorter.SortSpec{Column: sorter.Column(cfg.SortColumn), Direction: sorter.Direction(cfg.SortDirection)},
+		selectedCol: 0,
+		logger:      logger,
+		system:      NewMacOSAdapter(),
 	}
 	a.buildUI()
 	return a, nil

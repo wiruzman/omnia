@@ -344,12 +344,11 @@ func TestApplyResultsResetsSelectionAfterClear(t *testing.T) {
 	}
 }
 
-func TestApplyFirstResultsStartsAtTopOnNameAndKeepsConfiguredSortColumnVisible(t *testing.T) {
+func TestApplyFirstResultsStartsAtTopOnNameAndKeepsColumnOrder(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
 	a.sortSpec = sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc}
 	a.selectedCol = 0
-	a.visiblePriorityCol = sortColumnIndex(a.sortSpec.Column)
 
 	// tview marks a short, header-only table as tracking the end. The first
 	// real result set must not inherit that bottom offset or its synthetic row.
@@ -370,9 +369,6 @@ func TestApplyFirstResultsStartsAtTopOnNameAndKeepsConfiguredSortColumnVisible(t
 	if a.selectedCol != 0 {
 		t.Fatalf("expected cursor to start on name column, got %d", a.selectedCol)
 	}
-	if a.visiblePriorityCol != sortColumnIndex(sorter.SortSize) {
-		t.Fatalf("expected configured size sort column to stay visible, got %d", a.visiblePriorityCol)
-	}
 	row, col := a.table.GetSelection()
 	if row != 1 || col != 0 {
 		t.Fatalf("expected table cursor at first name cell, got row=%d col=%d", row, col)
@@ -381,8 +377,17 @@ func TestApplyFirstResultsStartsAtTopOnNameAndKeepsConfiguredSortColumnVisible(t
 	if rowOffset != 0 || colOffset != 0 {
 		t.Fatalf("expected first results to start at top offset, got (%d,%d)", rowOffset, colOffset)
 	}
-	if got := a.table.GetCell(1, 1).Text; got != "90 B" {
-		t.Fatalf("expected size column to stay visible beside name, got %q", got)
+	if got := a.table.GetCell(0, 1).Text; !strings.Contains(got, "Path") {
+		t.Fatalf("expected path to remain second column, got %q", got)
+	}
+	if got := a.table.GetCell(0, 2).Text; !strings.Contains(got, "Type") {
+		t.Fatalf("expected type to remain third column, got %q", got)
+	}
+	if got := a.table.GetCell(0, 3).Text; !strings.Contains(got, "Size") {
+		t.Fatalf("expected size to remain fourth column, got %q", got)
+	}
+	if got := a.table.GetCell(1, 3).Text; got != "90 B" {
+		t.Fatalf("expected size value in fourth column, got %q", got)
 	}
 }
 
@@ -442,12 +447,15 @@ func TestNewStartsOnNameColumnWithConfiguredSizeSort(t *testing.T) {
 	if a.selectedCol != 0 {
 		t.Fatalf("expected startup cursor on name column, got %d", a.selectedCol)
 	}
-	if a.visiblePriorityCol != sortColumnIndex(sorter.SortSize) {
-		t.Fatalf("expected size column to be prioritized in startup layout, got %d", a.visiblePriorityCol)
-	}
 	cols := a.visibleColumns()
-	if len(cols) < 2 || cols[0] != 0 || cols[1] != sortColumnIndex(sorter.SortSize) {
-		t.Fatalf("expected startup layout to show name then size, got %+v", cols)
+	want := []int{0, 1, 2, 3, 4, 5}
+	if len(cols) != len(want) {
+		t.Fatalf("expected canonical column order %+v, got %+v", want, cols)
+	}
+	for i := range want {
+		if cols[i] != want[i] {
+			t.Fatalf("expected canonical column order %+v, got %+v", want, cols)
+		}
 	}
 }
 
@@ -462,9 +470,6 @@ func TestSortKeyMovesSelectedColumnToSortColumn(t *testing.T) {
 	if a.selectedCol != sortColumnIndex(sorter.SortPath) {
 		t.Fatalf("expected selected column to follow path sort, got %d", a.selectedCol)
 	}
-	if a.visiblePriorityCol != sortColumnIndex(sorter.SortPath) {
-		t.Fatalf("expected visible priority column to follow path sort, got %d", a.visiblePriorityCol)
-	}
 
 	a.captureTableKeys(tcell.NewEventKey(tcell.KeyRune, 's', tcell.ModNone))
 	if a.sortSpec.Column != sorter.SortSize {
@@ -472,9 +477,6 @@ func TestSortKeyMovesSelectedColumnToSortColumn(t *testing.T) {
 	}
 	if a.selectedCol != sortColumnIndex(sorter.SortSize) {
 		t.Fatalf("expected selected column to follow size sort, got %d", a.selectedCol)
-	}
-	if a.visiblePriorityCol != sortColumnIndex(sorter.SortSize) {
-		t.Fatalf("expected visible priority column to follow size sort, got %d", a.visiblePriorityCol)
 	}
 }
 
@@ -678,7 +680,7 @@ func TestSortColumnIndex(t *testing.T) {
 	}
 }
 
-func TestRenderTableShowsActiveSortColumnNextToName(t *testing.T) {
+func TestRenderTableKeepsCanonicalColumnOrderWhenSizeSelected(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
 	a.selectedCol = sortColumnIndex(sorter.SortSize)
@@ -698,11 +700,17 @@ func TestRenderTableShowsActiveSortColumnNextToName(t *testing.T) {
 	if got := a.table.GetCell(0, 0).Text; !strings.Contains(got, "Name") {
 		t.Fatalf("expected first visible column to be Name, got %q", got)
 	}
-	if got := a.table.GetCell(0, 1).Text; !strings.Contains(got, "Size") {
-		t.Fatalf("expected active size sort column beside name, got %q", got)
+	if got := a.table.GetCell(0, 1).Text; !strings.Contains(got, "Path") {
+		t.Fatalf("expected second visible column to be Path, got %q", got)
 	}
-	if got := a.table.GetCell(1, 1).Text; got != "90 B" {
-		t.Fatalf("expected size value in second visible column, got %q", got)
+	if got := a.table.GetCell(0, 2).Text; !strings.Contains(got, "Type") {
+		t.Fatalf("expected third visible column to be Type, got %q", got)
+	}
+	if got := a.table.GetCell(0, 3).Text; !strings.Contains(got, "Size") {
+		t.Fatalf("expected fourth visible column to be Size, got %q", got)
+	}
+	if got := a.table.GetCell(1, 3).Text; got != "90 B" {
+		t.Fatalf("expected size value in fourth visible column, got %q", got)
 	}
 }
 

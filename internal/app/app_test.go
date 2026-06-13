@@ -195,6 +195,78 @@ func TestNewStartsWhenDaemonRunningUsingReadonlySnapshot(t *testing.T) {
 	}
 }
 
+func TestNewUsesSQLiteDirectReadOnlyStore(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfgPath, err := config.ConfigPath()
+	if err != nil {
+		t.Fatalf("config path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	cfg := config.Config{
+		IncludePaths:  []string{home},
+		ExcludeGlobs:  []string{".git"},
+		IndexDBPath:   "index.sqlite",
+		StoreBackend:  "sqlite",
+		MaxResults:    100,
+		DebounceMs:    50,
+		ScanBatchSize: 100,
+		DaemonDir:     "daemon",
+		SortColumn:    "name",
+		SortDirection: "ASC",
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	sqliteStore, err := store.OpenWithBackend(loaded.IndexDBPath, loaded.StoreBackend)
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	now := time.Now()
+	if err := sqliteStore.UpsertBatch(context.Background(), now.UnixNano(), []model.Entry{{
+		Path:       "/tmp/sqlite.txt",
+		Name:       "sqlite.txt",
+		ParentPath: "/tmp",
+		RootPath:   "/tmp",
+		Type:       model.TypeFile,
+		Size:       1,
+		CreatedAt:  now,
+		ModifiedAt: now,
+	}}); err != nil {
+		_ = sqliteStore.Close()
+		t.Fatalf("seed sqlite store: %v", err)
+	}
+	if err := sqliteStore.Close(); err != nil {
+		t.Fatalf("close sqlite store: %v", err)
+	}
+
+	if err := daemonstate.Write(loaded.DaemonStatusPath(), daemonstate.Status{Running: true, Indexing: false}); err != nil {
+		t.Fatalf("write daemon status: %v", err)
+	}
+
+	a, err := New()
+	if err != nil {
+		t.Fatalf("expected New to open direct sqlite store, got %v", err)
+	}
+	defer func() { _ = a.Close() }()
+
+	count, err := a.store.Count(context.Background())
+	if err != nil {
+		t.Fatalf("count sqlite entries: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 sqlite entry, got %d", count)
+	}
+}
+
 func TestDeletePathCallsTrashAndRemovesFromIndex(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)

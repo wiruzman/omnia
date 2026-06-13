@@ -138,6 +138,18 @@ func TestIsRetryableSnapshotError(t *testing.T) {
 	}
 }
 
+func TestReadonlyIndexPathUsesDirectSQLitePath(t *testing.T) {
+	sqliteSvc := &Service{cfg: config.Config{IndexDBPath: "/tmp/index.sqlite", StoreBackend: "sqlite"}}
+	if got := sqliteSvc.readonlyIndexPath(); got != "/tmp/index.sqlite" {
+		t.Fatalf("expected sqlite readonly path to be direct DB path, got %q", got)
+	}
+
+	bleveSvc := &Service{cfg: config.Config{IndexDBPath: "/tmp/index.bleve", StoreBackend: "bleve"}}
+	if got := bleveSvc.readonlyIndexPath(); got != "/tmp/index.bleve.readonly" {
+		t.Fatalf("expected bleve readonly path to be snapshot path, got %q", got)
+	}
+}
+
 func TestShouldRefreshIndexedTotal(t *testing.T) {
 	now := time.Unix(1714000000, 0)
 	ready := now.Add(-6 * time.Second)

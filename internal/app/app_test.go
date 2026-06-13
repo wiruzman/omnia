@@ -425,6 +425,11 @@ func TestClearingQueryRestoresCachedEmptyResultsImmediately(t *testing.T) {
 	if a.total != len(initial) || a.visible != len(initial) {
 		t.Fatalf("expected cached counts immediately, total=%d visible=%d", a.total, a.visible)
 	}
+	select {
+	case <-backend.queryStarted:
+		t.Fatal("expected cached clear not to start an empty refresh immediately")
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 func TestDebouncedQueryChangeCancelsInFlightSearchImmediately(t *testing.T) {
@@ -490,6 +495,11 @@ func TestClearQueryAppliesWarmStartCacheBeforeFullRefreshCompletes(t *testing.T)
 	}
 	if a.total != 42 {
 		t.Fatalf("expected cached total 42, got %d", a.total)
+	}
+	select {
+	case <-backend.queryStarted:
+		t.Fatal("expected warm-cache clear not to start an empty refresh immediately")
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

@@ -58,8 +58,7 @@ func (a *App) renderTable() {
 		}
 	}
 	if len(a.entries) > 0 {
-		physicalCol := physicalColumnForLogical(cols, a.selectedCol)
-		a.table.Select(a.selected+1, physicalCol)
+		a.table.Select(a.selected+1, 0)
 	}
 }
 
@@ -68,12 +67,9 @@ func (a *App) moveSelectionHorizontal(delta int) {
 	if row < 1 {
 		row = 1
 	}
-	nextCol := a.selectedCol + delta
+	nextCol := (a.selectedCol + delta) % len(tableHeaders)
 	if nextCol < 0 {
-		nextCol = 0
-	}
-	if nextCol >= len(tableHeaders) {
-		nextCol = len(tableHeaders) - 1
+		nextCol += len(tableHeaders)
 	}
 	a.selected = row - 1
 	a.selectedCol = nextCol

@@ -168,6 +168,14 @@ func (a *App) captureTableKeys(event *tcell.EventKey) *tcell.EventKey {
 			return nil
 		}
 	}
+	if event.Key() == tcell.KeyRight {
+		a.scrollColumnsHorizontal(1)
+		return nil
+	}
+	if event.Key() == tcell.KeyLeft {
+		a.scrollColumnsHorizontal(-1)
+		return nil
+	}
 	if event.Key() == tcell.KeyEnd {
 		if len(a.entries) == 0 {
 			return nil

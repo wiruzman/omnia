@@ -242,7 +242,7 @@ func (s *Store) Query(ctx context.Context, query string, sort sorter.SortSpec, l
 		}
 	}
 
-	if !plan.allowPathContains() {
+	if !plan.allowPathContains(len(entries)) {
 		sortEntries(entries, sort)
 		return QueryResult{Entries: entries, Total: len(entries)}, nil
 	}

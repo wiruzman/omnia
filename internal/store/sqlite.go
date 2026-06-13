@@ -352,7 +352,7 @@ func (s *SQLiteStore) Query(ctx context.Context, query string, sortSpec sorter.S
 		}
 	}
 
-	if !plan.allowPathContains() {
+	if !plan.allowPathContains(len(entries)) {
 		sortEntries(entries, sortSpec)
 		return QueryResult{Entries: entries, Total: len(entries)}, nil
 	}

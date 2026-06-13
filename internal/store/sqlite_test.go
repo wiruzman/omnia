@@ -22,6 +22,43 @@ func TestOpenWithBackendDefaultsToSQLite(t *testing.T) {
 	}
 }
 
+func TestSQLiteInterruptOnCancelStopsRunningStatement(t *testing.T) {
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	stmt, err := st.db.Prepare(`
+		WITH RECURSIVE cnt(x) AS (
+			VALUES(0)
+			UNION ALL
+			SELECT x + 1 FROM cnt WHERE x < 100000000
+		)
+		SELECT sum(x) FROM cnt;
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stmt.Finalize()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stopInterrupt := st.db.interruptOnCancel(ctx)
+	defer stopInterrupt()
+
+	timer := time.AfterFunc(10*time.Millisecond, cancel)
+	defer timer.Stop()
+
+	start := time.Now()
+	_, err = stmt.Step()
+	if err == nil {
+		t.Fatal("expected canceled statement to return an error")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("expected cancellation to interrupt running statement promptly, took %s", elapsed)
+	}
+}
+
 func TestSQLiteStoreUpsertQueryCleanupAndReadOnly(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "index.sqlite")

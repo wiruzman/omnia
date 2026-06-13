@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -551,6 +552,8 @@ func (s *SQLiteStore) queryEntries(ctx context.Context, from string, where strin
 		return nil, err
 	}
 	defer stmt.Finalize()
+	stopInterrupt := s.db.interruptOnCancel(ctx)
+	defer stopInterrupt()
 
 	for i, arg := range args {
 		if err := bindSQLiteAny(stmt, i+1, arg); err != nil {
@@ -568,6 +571,9 @@ func (s *SQLiteStore) queryEntries(ctx context.Context, from string, where strin
 	for {
 		row, err := stmt.Step()
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			return nil, err
 		}
 		if !row {
@@ -717,6 +723,27 @@ func (d *sqliteDB) errmsg() string {
 
 func (d *sqliteDB) errorf(operation string) error {
 	return fmt.Errorf("%s: %s", operation, d.errmsg())
+}
+
+func (d *sqliteDB) interruptOnCancel(ctx context.Context) func() {
+	done := make(chan struct{})
+	var stopped atomic.Bool
+	go func() {
+		select {
+		case <-ctx.Done():
+			if stopped.Load() {
+				return
+			}
+			if d != nil && d.db != nil {
+				C.sqlite3_interrupt(d.db)
+			}
+		case <-done:
+		}
+	}()
+	return func() {
+		stopped.Store(true)
+		close(done)
+	}
 }
 
 func (s *sqliteStmt) Finalize() {

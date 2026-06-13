@@ -264,7 +264,8 @@ func (s *SQLiteStore) Query(ctx context.Context, query string, sortSpec sorter.S
 	if err := ctx.Err(); err != nil {
 		return QueryResult{}, err
 	}
-	qLower := strings.ToLower(strings.TrimSpace(query))
+	plan := planQuery(query)
+	qLower := plan.query
 	if limit <= 0 {
 		limit = 100
 	}
@@ -286,58 +287,89 @@ func (s *SQLiteStore) Query(ctx context.Context, query string, sortSpec sorter.S
 	entries := make([]model.Entry, 0, limit)
 	seen := make(map[string]struct{}, limit)
 
-	prefixName, err := s.queryPrefix(ctx, "name_lower", qLower, sortSpec, limit, offset)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	entries = appendUniqueEntries(entries, seen, prefixName, limit)
-	if len(entries) >= limit {
-		sortEntries(entries, sortSpec)
-		return QueryResult{Entries: entries, Total: len(entries)}, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return QueryResult{}, err
-	}
-
-	prefixPath, err := s.queryPrefix(ctx, "path_lower", qLower, sortSpec, limit, offset)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	entries = appendUniqueEntries(entries, seen, prefixPath, limit)
-	if len(entries) >= limit {
-		sortEntries(entries, sortSpec)
-		return QueryResult{Entries: entries, Total: len(entries)}, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return QueryResult{}, err
-	}
-	if len(qLower) < 4 && !strings.Contains(qLower, "/") && len(entries) >= minInt(limit, 200) {
-		sortEntries(entries, sortSpec)
-		return QueryResult{Entries: entries, Total: len(entries)}, nil
-	}
-	if len(qLower) < 3 && !strings.Contains(qLower, "/") {
-		sortEntries(entries, sortSpec)
-		return QueryResult{Entries: entries, Total: len(entries)}, nil
+	if !plan.pathLike {
+		prefixName, err := s.queryPrefix(ctx, "name_lower", qLower, sortSpec, limit, offset)
+		if err != nil {
+			return QueryResult{}, err
+		}
+		entries = appendUniqueEntries(entries, seen, prefixName, limit)
+		if len(entries) >= limit {
+			sortEntries(entries, sortSpec)
+			return QueryResult{Entries: entries, Total: len(entries)}, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return QueryResult{}, err
+		}
 	}
 
-	containsName, err := s.queryContains(ctx, "name", qLower, sortSpec, limit, offset)
-	if err != nil {
-		return QueryResult{}, err
+	if plan.pathLike && plan.absolutePathLike {
+		prefixPath, err := s.queryPrefix(ctx, "path_lower", qLower, sortSpec, limit, offset)
+		if err != nil {
+			return QueryResult{}, err
+		}
+		entries = appendUniqueEntries(entries, seen, prefixPath, limit)
+		if len(entries) >= limit {
+			sortEntries(entries, sortSpec)
+			return QueryResult{Entries: entries, Total: len(entries)}, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return QueryResult{}, err
+		}
 	}
-	entries = appendUniqueEntries(entries, seen, containsName, limit)
-	if len(entries) >= limit {
+
+	if plan.shouldStopAfterPrefix(len(entries), limit) {
 		sortEntries(entries, sortSpec)
 		return QueryResult{Entries: entries, Total: len(entries)}, nil
 	}
-	if err := ctx.Err(); err != nil {
-		return QueryResult{}, err
+
+	if plan.allowNameContains() {
+		containsName, err := s.queryContains(ctx, "name", qLower, sortSpec, limit, offset)
+		if err != nil {
+			return QueryResult{}, err
+		}
+		entries = appendUniqueEntries(entries, seen, containsName, limit)
+		if len(entries) >= limit {
+			sortEntries(entries, sortSpec)
+			return QueryResult{Entries: entries, Total: len(entries)}, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return QueryResult{}, err
+		}
+
+		if plan.allowAllTermContains() {
+			containsNameTerms, err := s.queryContainsAll(ctx, "name", plan.terms, sortSpec, limit, offset)
+			if err != nil {
+				return QueryResult{}, err
+			}
+			entries = appendUniqueEntries(entries, seen, containsNameTerms, limit)
+			if len(entries) >= limit {
+				sortEntries(entries, sortSpec)
+				return QueryResult{Entries: entries, Total: len(entries)}, nil
+			}
+			if err := ctx.Err(); err != nil {
+				return QueryResult{}, err
+			}
+		}
 	}
 
-	containsPath, err := s.queryContains(ctx, "path", qLower, sortSpec, limit, offset)
-	if err != nil {
-		return QueryResult{}, err
+	if !plan.allowPathContains() {
+		sortEntries(entries, sortSpec)
+		return QueryResult{Entries: entries, Total: len(entries)}, nil
 	}
-	entries = appendUniqueEntries(entries, seen, containsPath, limit)
+
+	if plan.pathLike || !plan.allowAllTermContains() {
+		containsPath, err := s.queryContains(ctx, "path", qLower, sortSpec, limit, offset)
+		if err != nil {
+			return QueryResult{}, err
+		}
+		entries = appendUniqueEntries(entries, seen, containsPath, limit)
+	} else {
+		containsPathTerms, err := s.queryContainsAll(ctx, "path", plan.terms, sortSpec, limit, offset)
+		if err != nil {
+			return QueryResult{}, err
+		}
+		entries = appendUniqueEntries(entries, seen, containsPathTerms, limit)
+	}
 	sortEntries(entries, sortSpec)
 	return QueryResult{Entries: entries, Total: len(entries)}, nil
 }
@@ -488,6 +520,13 @@ func (s *SQLiteStore) queryContains(ctx context.Context, field string, qLower st
 	from := ftsTable + " f JOIN entries e ON e.rowid = f.rowid"
 	where := ftsTable + " MATCH ?"
 	return s.queryEntries(ctx, from, where, []any{ftsLiteral(qLower)}, sortSpec, limit, offset)
+}
+
+func (s *SQLiteStore) queryContainsAll(ctx context.Context, field string, terms []string, sortSpec sorter.SortSpec, limit, offset int) ([]model.Entry, error) {
+	ftsTable := field + "_fts"
+	from := ftsTable + " f JOIN entries e ON e.rowid = f.rowid"
+	where := ftsTable + " MATCH ?"
+	return s.queryEntries(ctx, from, where, []any{ftsAllTerms(terms)}, sortSpec, limit, offset)
 }
 
 func (s *SQLiteStore) queryEntries(ctx context.Context, from string, where string, args []any, sortSpec sorter.SortSpec, limit, offset int) ([]model.Entry, error) {
@@ -988,6 +1027,14 @@ func prefixUpperBound(prefix string) string {
 
 func ftsLiteral(value string) string {
 	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+}
+
+func ftsAllTerms(terms []string) string {
+	parts := make([]string, 0, len(terms))
+	for _, term := range terms {
+		parts = append(parts, ftsLiteral(term))
+	}
+	return strings.Join(parts, " AND ")
 }
 
 func likeContainsPattern(value string) string {

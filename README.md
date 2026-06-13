@@ -62,9 +62,11 @@ Logs and daemon state are stored under:
 
 For non-empty queries, Omnia prioritizes cheaper lookups first to keep typing responsive:
 
-- Prefix match on file name.
-- Prefix match on full path.
-- For longer queries, contains match on name, then path.
+- Plain filename terms: prefix match first, then filename contains for terms of at least 3 characters.
+- Short plain terms: 1-2 characters stay prefix-only; 3 characters search filenames but skip broad path contains.
+- Longer plain terms: filename matches first, then path contains.
+- Slash/path-like terms: path prefix or path contains, skipping filename scans.
+- Multi-word terms: exact phrase contains first, then all-term matching so separated words can still match.
 
 If a query is slow or times out, the app falls back to bounded in-memory filtering so the UI stays responsive.
 

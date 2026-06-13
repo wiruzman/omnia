@@ -387,6 +387,45 @@ func TestEscFromTableClearsQueryAndKeepsCurrentSort(t *testing.T) {
 	}
 }
 
+func TestClearingQueryRestoresCachedEmptyResultsImmediately(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+
+	now := time.Now()
+	initial := []model.Entry{
+		{Path: "/tmp/alpha.txt", Name: "alpha.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, CreatedAt: now, ModifiedAt: now},
+		{Path: "/tmp/beta.txt", Name: "beta.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, CreatedAt: now, ModifiedAt: now},
+	}
+	a.rememberEmptyQueryResults("", a.sortSpec, initial, len(initial))
+
+	a.input.SetText("needle")
+	a.invalidatePendingRefreshes()
+	searchResults := []model.Entry{
+		{Path: "/tmp/needle.txt", Name: "needle.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, CreatedAt: now, ModifiedAt: now},
+	}
+	a.applyResults(searchResults, len(searchResults))
+
+	backend := &blockingStartupBackend{
+		Backend:      a.store,
+		queryStarted: make(chan struct{}),
+		releaseQuery: make(chan struct{}),
+	}
+	a.store = backend
+	defer close(backend.releaseQuery)
+
+	a.input.SetText("")
+
+	if len(a.entries) != len(initial) {
+		t.Fatalf("expected cached initial results immediately, got %d entries", len(a.entries))
+	}
+	if a.entries[0].Name != "alpha.txt" || a.entries[1].Name != "beta.txt" {
+		t.Fatalf("expected cached initial result order, first=%q second=%q", a.entries[0].Name, a.entries[1].Name)
+	}
+	if a.total != len(initial) || a.visible != len(initial) {
+		t.Fatalf("expected cached counts immediately, total=%d visible=%d", a.total, a.visible)
+	}
+}
+
 func TestApplyResultsResetsSelectionAfterClear(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)

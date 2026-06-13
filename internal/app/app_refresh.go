@@ -142,6 +142,7 @@ func (a *App) refreshDataAsync(ctx context.Context, refreshID uint64, query stri
 	if refreshID != atomic.LoadUint64(&a.refreshID) {
 		return
 	}
+	a.rememberEmptyQueryResults(query, sortSpec, entries, total)
 	a.cacheWarmStartResults(query, sortSpec, entries, total)
 	a.tui.QueueUpdateDraw(func() {
 		if refreshID != atomic.LoadUint64(&a.refreshID) {
@@ -165,6 +166,7 @@ func (a *App) refreshData(ctx context.Context) {
 		a.logger.Printf("query failed: %v", err)
 		return
 	}
+	a.rememberEmptyQueryResults(a.query, a.sortSpec, entries, total)
 	a.cacheWarmStartResults(a.query, a.sortSpec, entries, total)
 	a.applyResults(entries, total)
 }
@@ -316,6 +318,40 @@ func (a *App) applyResults(entries []model.Entry, total int) {
 	a.renderTable()
 	a.setSearchState(searchStateDone)
 	a.updateStatus()
+}
+
+func (a *App) rememberEmptyQueryResults(query string, sortSpec sorter.SortSpec, entries []model.Entry, total int) {
+	if strings.TrimSpace(query) != "" {
+		return
+	}
+	result := store.QueryResult{
+		Entries: append([]model.Entry(nil), entries...),
+		Total:   total,
+	}
+
+	a.emptyQueryMu.Lock()
+	if a.emptyQueryResults == nil {
+		a.emptyQueryResults = make(map[sorter.SortSpec]store.QueryResult)
+	}
+	a.emptyQueryResults[sortSpec] = result
+	a.emptyQueryMu.Unlock()
+}
+
+func (a *App) restoreEmptyQueryResults(sortSpec sorter.SortSpec) bool {
+	a.emptyQueryMu.RLock()
+	result, ok := a.emptyQueryResults[sortSpec]
+	a.emptyQueryMu.RUnlock()
+	if !ok {
+		return false
+	}
+	a.applyResults(append([]model.Entry(nil), result.Entries...), result.Total)
+	return true
+}
+
+func (a *App) forgetEmptyQueryResults() {
+	a.emptyQueryMu.Lock()
+	a.emptyQueryResults = nil
+	a.emptyQueryMu.Unlock()
 }
 
 func (a *App) cacheWarmStartResults(query string, sortSpec sorter.SortSpec, entries []model.Entry, total int) {

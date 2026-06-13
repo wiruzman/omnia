@@ -60,11 +60,15 @@ func (a *App) startStatusLoop(ctx context.Context) {
 				a.tui.QueueUpdateDraw(func() {
 					running := a.isIndexing()
 					now := time.Now()
+					if !wasRunning && running {
+						a.forgetEmptyQueryResults()
+					}
 					if shouldQueueLiveRefresh(running, a.query, lastLiveRefresh, now, a.searchState.Load()) {
 						a.requestRefreshAsync(a.query, a.sortSpec)
 						lastLiveRefresh = now
 					}
 					if wasRunning && !running {
+						a.forgetEmptyQueryResults()
 						a.requestRefreshAsync(a.query, a.sortSpec)
 						lastLiveRefresh = time.Now()
 					}

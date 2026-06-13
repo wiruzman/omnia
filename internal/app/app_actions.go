@@ -74,6 +74,7 @@ func (a *App) deletePath(path string) {
 		a.logger.Printf("delete failed for %s: %v", path, err)
 		return
 	}
+	a.forgetEmptyQueryResults()
 
 	if err := a.deleteFromIndexWithRetry(context.Background(), path); err != nil {
 		a.logger.Printf("index delete failed for %s: %v", path, err)
@@ -102,6 +103,7 @@ func (a *App) deletePathAsync(path string) {
 			})
 			return
 		}
+		a.forgetEmptyQueryResults()
 
 		// Remove from visible results and stop delete progress as soon as the file is in Trash.
 		a.tui.QueueUpdateDraw(func() {

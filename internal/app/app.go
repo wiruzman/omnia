@@ -52,6 +52,8 @@ type App struct {
 	searchCancel                context.CancelFunc
 	searchRunID                 uint64
 	searchState                 atomic.Uint32
+	emptyQueryMu                sync.RWMutex
+	emptyQueryResults           map[sorter.SortSpec]store.QueryResult
 	deleteState                 atomic.Uint32
 	deleteMu                    sync.Mutex
 	deletingPath                string
@@ -154,6 +156,7 @@ func (a *App) startInitialRefresh(ctx context.Context) {
 }
 
 func (a *App) queueCachedWarmStart(ctx context.Context) {
+	sortSpec := a.sortSpec
 	res, ok, err := a.loadWarmStartCache()
 	if err != nil {
 		a.logger.Printf("load startup cache failed: %v", err)
@@ -165,9 +168,10 @@ func (a *App) queueCachedWarmStart(ctx context.Context) {
 		return
 	}
 	a.tui.QueueUpdateDraw(func() {
-		if strings.TrimSpace(a.query) != "" || len(a.entries) > 0 {
+		if strings.TrimSpace(a.query) != "" || len(a.entries) > 0 || a.sortSpec != sortSpec {
 			return
 		}
+		a.rememberEmptyQueryResults("", sortSpec, res.Entries, res.Total)
 		a.applyResults(res.Entries, res.Total)
 	})
 }
@@ -225,5 +229,6 @@ func (a *App) refreshReadonlySnapshotStore() error {
 	if oldStore != nil {
 		_ = oldStore.Close()
 	}
+	a.forgetEmptyQueryResults()
 	return nil
 }

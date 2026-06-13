@@ -411,6 +411,7 @@ func TestClearingQueryRestoresCachedEmptyResultsImmediately(t *testing.T) {
 		releaseQuery: make(chan struct{}),
 	}
 	a.store = backend
+	defer a.invalidatePendingRefreshes()
 	defer close(backend.releaseQuery)
 
 	a.input.SetText("")
@@ -423,6 +424,72 @@ func TestClearingQueryRestoresCachedEmptyResultsImmediately(t *testing.T) {
 	}
 	if a.total != len(initial) || a.visible != len(initial) {
 		t.Fatalf("expected cached counts immediately, total=%d visible=%d", a.total, a.visible)
+	}
+}
+
+func TestDebouncedQueryChangeCancelsInFlightSearchImmediately(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.cfg.DebounceMs = int((10 * time.Second).Milliseconds())
+	defer a.invalidatePendingRefreshes()
+
+	searchCtx, cleanup := a.newSearchContext(context.Background())
+	defer cleanup()
+
+	a.handleQueryChanged("signing")
+
+	select {
+	case <-searchCtx.Done():
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected typing a new query to cancel the in-flight search immediately")
+	}
+	if !errors.Is(searchCtx.Err(), context.Canceled) {
+		t.Fatalf("expected canceled search context, got %v", searchCtx.Err())
+	}
+}
+
+func TestClearQueryAppliesWarmStartCacheBeforeFullRefreshCompletes(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+
+	now := time.Now()
+	cached := model.Entry{
+		Path:       "/fixture/cached.txt",
+		Name:       "cached.txt",
+		ParentPath: "/fixture",
+		RootPath:   "/fixture",
+		Type:       model.TypeFile,
+		Size:       9,
+		CreatedAt:  now,
+		ModifiedAt: now,
+	}
+	limit := startupcache.EffectiveLimit(a.cfg.MaxResults)
+	if err := startupcache.Save(startupcache.Path(a.cfg), a.sortSpec, limit, store.QueryResult{
+		Entries: []model.Entry{cached},
+		Total:   42,
+	}); err != nil {
+		t.Fatalf("seed warm start cache: %v", err)
+	}
+
+	backend := &blockingStartupBackend{
+		Backend:      a.store,
+		queryStarted: make(chan struct{}),
+		releaseQuery: make(chan struct{}),
+	}
+	a.store = backend
+	defer a.invalidatePendingRefreshes()
+	defer close(backend.releaseQuery)
+
+	a.query = "signing"
+	a.entries = []model.Entry{{Path: "/fixture/search-hit.txt", Name: "search-hit.txt"}}
+
+	a.handleQueryChanged("")
+
+	if len(a.entries) != 1 || a.entries[0].Path != cached.Path {
+		t.Fatalf("expected clear to apply cached preview immediately, got %+v", a.entries)
+	}
+	if a.total != 42 {
+		t.Fatalf("expected cached total 42, got %d", a.total)
 	}
 }
 

@@ -48,6 +48,10 @@ func (a *App) debounceRefresh() {
 	if a.searchDue != nil {
 		a.searchDue.Stop()
 	}
+	if a.searchCancel != nil {
+		a.searchCancel()
+		a.searchCancel = nil
+	}
 	a.setSearchState(searchStatePending)
 	refreshID := atomic.AddUint64(&a.refreshID, 1)
 	query := a.query
@@ -371,4 +375,17 @@ func (a *App) cacheWarmStartResults(query string, sortSpec sorter.SortSpec, entr
 			a.logger.Printf("save startup cache failed: %v", err)
 		}
 	}()
+}
+
+func (a *App) applyWarmStartCache() bool {
+	res, ok, err := a.loadWarmStartCache()
+	if err != nil {
+		a.logger.Printf("load startup cache failed: %v", err)
+		return false
+	}
+	if !ok {
+		return false
+	}
+	a.applyResults(res.Entries, res.Total)
+	return true
 }

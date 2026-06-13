@@ -149,8 +149,15 @@ func (s *Store) Query(ctx context.Context, query string, sort sorter.SortSpec, l
 	if err := ctx.Err(); err != nil {
 		return QueryResult{}, err
 	}
-	qLower := strings.ToLower(strings.TrimSpace(query))
+	plan := planQuery(query)
+	qLower := plan.query
 	searchSort := sortToBleveFields(sort)
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
 
 	if qLower == "" {
 		entries, total, err := s.searchEntries(ctx, bleve.NewMatchAllQuery(), sortToBleveFields(sort), limit, offset)
@@ -164,68 +171,97 @@ func (s *Store) Query(ctx context.Context, query string, sort sorter.SortSpec, l
 	entries := make([]model.Entry, 0, limit)
 	seen := make(map[string]struct{}, limit)
 
-	prefixName := bleve.NewPrefixQuery(qLower)
-	prefixName.SetField("name_lower")
-	prefixNameEntries, _, err := s.searchEntries(ctx, prefixName, searchSort, limit, offset)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	entries = appendUniqueEntries(entries, seen, prefixNameEntries, limit)
-	if len(entries) >= limit {
-		sortEntries(entries, sort)
-		return QueryResult{Entries: entries, Total: len(entries)}, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return QueryResult{}, err
-	}
-
-	prefixPath := bleve.NewPrefixQuery(qLower)
-	prefixPath.SetField("path_lower")
-	prefixPathEntries, _, err := s.searchEntries(ctx, prefixPath, searchSort, limit, offset)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	entries = appendUniqueEntries(entries, seen, prefixPathEntries, limit)
-	if len(entries) >= limit {
-		sortEntries(entries, sort)
-		return QueryResult{Entries: entries, Total: len(entries)}, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return QueryResult{}, err
-	}
-	if len(qLower) < 4 && !strings.Contains(qLower, "/") && len(entries) >= minInt(limit, 200) {
-		sortEntries(entries, sort)
-		return QueryResult{Entries: entries, Total: len(entries)}, nil
+	if !plan.pathLike {
+		prefixName := bleve.NewPrefixQuery(qLower)
+		prefixName.SetField("name_lower")
+		prefixNameEntries, _, err := s.searchEntries(ctx, prefixName, searchSort, limit, offset)
+		if err != nil {
+			return QueryResult{}, err
+		}
+		entries = appendUniqueEntries(entries, seen, prefixNameEntries, limit)
+		if len(entries) >= limit {
+			sortEntries(entries, sort)
+			return QueryResult{Entries: entries, Total: len(entries)}, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return QueryResult{}, err
+		}
 	}
 
-	// Very short contains scans are expensive and noisy; keep them prefix-only.
-	if len(qLower) < 3 && !strings.Contains(qLower, "/") {
+	if plan.pathLike && plan.absolutePathLike {
+		prefixPath := bleve.NewPrefixQuery(qLower)
+		prefixPath.SetField("path_lower")
+		prefixPathEntries, _, err := s.searchEntries(ctx, prefixPath, searchSort, limit, offset)
+		if err != nil {
+			return QueryResult{}, err
+		}
+		entries = appendUniqueEntries(entries, seen, prefixPathEntries, limit)
+		if len(entries) >= limit {
+			sortEntries(entries, sort)
+			return QueryResult{Entries: entries, Total: len(entries)}, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return QueryResult{}, err
+		}
+	}
+
+	if plan.shouldStopAfterPrefix(len(entries), limit) {
 		sortEntries(entries, sort)
 		return QueryResult{Entries: entries, Total: len(entries)}, nil
 	}
 
-	containsName := bleve.NewWildcardQuery("*" + qLower + "*")
-	containsName.SetField("name_lower")
-	containsNameEntries, _, err := s.searchEntries(ctx, containsName, searchSort, limit, offset)
-	if err != nil {
-		return QueryResult{}, err
+	if plan.allowNameContains() {
+		containsName := bleveContainsQuery("name_lower", qLower)
+		containsNameEntries, _, err := s.searchEntries(ctx, containsName, searchSort, limit, offset)
+		if err != nil {
+			return QueryResult{}, err
+		}
+		entries = appendUniqueEntries(entries, seen, containsNameEntries, limit)
+		if len(entries) >= limit {
+			sortEntries(entries, sort)
+			return QueryResult{Entries: entries, Total: len(entries)}, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return QueryResult{}, err
+		}
+
+		if plan.allowAllTermContains() {
+			containsNameTerms := bleveContainsAllQuery("name_lower", plan.terms)
+			containsNameTermEntries, _, err := s.searchEntries(ctx, containsNameTerms, searchSort, limit, offset)
+			if err != nil {
+				return QueryResult{}, err
+			}
+			entries = appendUniqueEntries(entries, seen, containsNameTermEntries, limit)
+			if len(entries) >= limit {
+				sortEntries(entries, sort)
+				return QueryResult{Entries: entries, Total: len(entries)}, nil
+			}
+			if err := ctx.Err(); err != nil {
+				return QueryResult{}, err
+			}
+		}
 	}
-	entries = appendUniqueEntries(entries, seen, containsNameEntries, limit)
-	if len(entries) >= limit {
+
+	if !plan.allowPathContains() {
 		sortEntries(entries, sort)
 		return QueryResult{Entries: entries, Total: len(entries)}, nil
 	}
-	if err := ctx.Err(); err != nil {
-		return QueryResult{}, err
-	}
 
-	containsPath := bleve.NewWildcardQuery("*" + qLower + "*")
-	containsPath.SetField("path_lower")
-	containsPathEntries, _, err := s.searchEntries(ctx, containsPath, searchSort, limit, offset)
-	if err != nil {
-		return QueryResult{}, err
+	containsPath := bleveContainsQuery("path_lower", qLower)
+	if plan.pathLike || !plan.allowAllTermContains() {
+		containsPathEntries, _, err := s.searchEntries(ctx, containsPath, searchSort, limit, offset)
+		if err != nil {
+			return QueryResult{}, err
+		}
+		entries = appendUniqueEntries(entries, seen, containsPathEntries, limit)
+	} else {
+		containsPathTerms := bleveContainsAllQuery("path_lower", plan.terms)
+		containsPathTermEntries, _, err := s.searchEntries(ctx, containsPathTerms, searchSort, limit, offset)
+		if err != nil {
+			return QueryResult{}, err
+		}
+		entries = appendUniqueEntries(entries, seen, containsPathTermEntries, limit)
 	}
-	entries = appendUniqueEntries(entries, seen, containsPathEntries, limit)
 	sortEntries(entries, sort)
 
 	// Avoid expensive full COUNT during live search; report visible match count.

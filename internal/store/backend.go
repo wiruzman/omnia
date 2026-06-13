@@ -24,9 +24,26 @@ type Backend interface {
 	Close() error
 }
 
-func OpenWithBackend(path, backend string) (Backend, error) {
+func NormalizeBackend(backend string) string {
 	switch strings.ToLower(strings.TrimSpace(backend)) {
-	case "", "bleve":
+	case "", "sqlite", "fts5", "sqlite_fts5", "sqlite-fts5":
+		return "sqlite"
+	case "bleve":
+		return "bleve"
+	default:
+		return strings.ToLower(strings.TrimSpace(backend))
+	}
+}
+
+func UsesDirectReadOnly(backend string) bool {
+	return NormalizeBackend(backend) == "sqlite"
+}
+
+func OpenWithBackend(path, backend string) (Backend, error) {
+	switch NormalizeBackend(backend) {
+	case "sqlite":
+		return OpenSQLite(path)
+	case "bleve":
 		return Open(path)
 	default:
 		return nil, fmt.Errorf("unsupported store backend: %s", backend)
@@ -34,8 +51,10 @@ func OpenWithBackend(path, backend string) (Backend, error) {
 }
 
 func OpenReadOnlyWithBackend(path, backend string) (Backend, error) {
-	switch strings.ToLower(strings.TrimSpace(backend)) {
-	case "", "bleve":
+	switch NormalizeBackend(backend) {
+	case "sqlite":
+		return OpenSQLiteReadOnly(path)
+	case "bleve":
 		return OpenReadOnly(path)
 	default:
 		return nil, fmt.Errorf("unsupported store backend: %s", backend)

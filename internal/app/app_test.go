@@ -627,6 +627,96 @@ func TestArrowRightUsesNativeHorizontalTableScroll(t *testing.T) {
 	}
 }
 
+func TestSearchInputArrowsFocusResultsAndScrollColumns(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.table.SetRect(0, 0, 50, 5)
+
+	now := time.Now()
+	seedEntries(t, a, []model.Entry{{
+		Path:       "/tmp/" + strings.Repeat("p", 90),
+		Name:       strings.Repeat("n", 40),
+		ParentPath: "/tmp",
+		RootPath:   "/tmp",
+		Type:       model.TypeFile,
+		Size:       90,
+		CreatedAt:  now,
+		ModifiedAt: now,
+	}})
+
+	handler := a.input.InputHandler()
+	a.tui.SetFocus(a.input)
+	handler(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone), func(tview.Primitive) {})
+
+	if a.tui.GetFocus() != a.table {
+		t.Fatalf("expected right arrow in search input to focus results")
+	}
+	if a.horizontalScrollCol != 1 {
+		t.Fatalf("expected right arrow in search input to scroll rendered columns right, got %d", a.horizontalScrollCol)
+	}
+
+	a.tui.SetFocus(a.input)
+	handler(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModNone), func(tview.Primitive) {})
+
+	if a.tui.GetFocus() != a.table {
+		t.Fatalf("expected left arrow in search input to focus results")
+	}
+	if a.horizontalScrollCol != 0 {
+		t.Fatalf("expected left arrow in search input to scroll rendered columns left, got %d", a.horizontalScrollCol)
+	}
+}
+
+func TestSearchInputPageKeysFocusResultsAndPageTable(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.table.SetRect(0, 0, 80, 5)
+
+	now := time.Now()
+	entries := make([]model.Entry, 12)
+	for i := range entries {
+		entries[i] = model.Entry{
+			Path:       "/tmp/page-target",
+			Name:       "page-target",
+			Type:       model.TypeFile,
+			Size:       int64(i),
+			CreatedAt:  now,
+			ModifiedAt: now,
+		}
+	}
+	seedEntries(t, a, entries)
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer screen.Fini()
+	screen.SetSize(80, 5)
+	a.table.Draw(screen)
+
+	handler := a.input.InputHandler()
+	a.tui.SetFocus(a.input)
+	handler(tcell.NewEventKey(tcell.KeyPgDn, 0, tcell.ModNone), func(tview.Primitive) {})
+
+	if a.tui.GetFocus() != a.table {
+		t.Fatalf("expected page down in search input to focus results")
+	}
+	row, col := a.table.GetSelection()
+	if row != 5 || col != 0 {
+		t.Fatalf("expected page down in search input to move table selection to row=5 col=0, got row=%d col=%d", row, col)
+	}
+
+	a.tui.SetFocus(a.input)
+	handler(tcell.NewEventKey(tcell.KeyPgUp, 0, tcell.ModNone), func(tview.Primitive) {})
+
+	if a.tui.GetFocus() != a.table {
+		t.Fatalf("expected page up in search input to focus results")
+	}
+	row, col = a.table.GetSelection()
+	if row != 1 || col != 0 {
+		t.Fatalf("expected page up in search input to move table selection to row=1 col=0, got row=%d col=%d", row, col)
+	}
+}
+
 func TestArrowRightStaysOnRightmostColumn(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)

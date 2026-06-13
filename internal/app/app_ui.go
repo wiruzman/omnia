@@ -72,18 +72,9 @@ func (a *App) buildUI() {
 			}
 			a.tui.SetFocus(a.table)
 			return nil
-		case tcell.KeyRight:
-			if event.Modifiers()&tcell.ModShift != 0 {
-				a.moveSelectionHorizontal(1)
-				a.tui.SetFocus(a.table)
-				return nil
-			}
-		case tcell.KeyLeft:
-			if event.Modifiers()&tcell.ModShift != 0 {
-				a.moveSelectionHorizontal(-1)
-				a.tui.SetFocus(a.table)
-				return nil
-			}
+		case tcell.KeyRight, tcell.KeyLeft, tcell.KeyPgDn, tcell.KeyPgUp:
+			a.forwardNavigationToResults(event)
+			return nil
 		}
 		return event
 	})
@@ -155,6 +146,13 @@ func (a *App) buildUI() {
 	a.renderHeader(a.visibleColumns())
 	a.updateStatus()
 	a.renderProgressTable()
+}
+
+func (a *App) forwardNavigationToResults(event *tcell.EventKey) {
+	a.tui.SetFocus(a.table)
+	a.table.InputHandler()(event, func(p tview.Primitive) {
+		a.tui.SetFocus(p)
+	})
 }
 
 func (a *App) captureTableKeys(event *tcell.EventKey) *tcell.EventKey {

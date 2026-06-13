@@ -73,13 +73,17 @@ func (a *App) buildUI() {
 			a.tui.SetFocus(a.table)
 			return nil
 		case tcell.KeyRight:
-			a.moveSelectionHorizontal(1)
-			a.tui.SetFocus(a.table)
-			return nil
+			if event.Modifiers()&tcell.ModShift != 0 {
+				a.moveSelectionHorizontal(1)
+				a.tui.SetFocus(a.table)
+				return nil
+			}
 		case tcell.KeyLeft:
-			a.moveSelectionHorizontal(-1)
-			a.tui.SetFocus(a.table)
-			return nil
+			if event.Modifiers()&tcell.ModShift != 0 {
+				a.moveSelectionHorizontal(-1)
+				a.tui.SetFocus(a.table)
+				return nil
+			}
 		}
 		return event
 	})
@@ -90,7 +94,7 @@ func (a *App) buildUI() {
 		}
 	})
 
-	a.table = tview.NewTable().SetBorders(false).SetSelectable(true, true)
+	a.table = tview.NewTable().SetBorders(false).SetSelectable(true, false)
 	a.table.SetBackgroundColor(tcell.ColorDefault)
 	a.table.SetSelectedStyle(tcell.StyleDefault.Reverse(true))
 	a.table.SetFixed(1, 0)
@@ -101,18 +105,11 @@ func (a *App) buildUI() {
 		a.selected = row - 1
 		a.openSelected()
 	})
-	a.table.SetSelectionChangedFunc(func(row, col int) {
+	a.table.SetSelectionChangedFunc(func(row, _ int) {
 		if row <= 0 || row-1 >= len(a.entries) {
 			return
 		}
 		a.selected = row - 1
-		a.selectedCol = a.logicalColumnForPhysical(col)
-		if a.selectedCol < 0 {
-			a.selectedCol = 0
-		}
-		if a.selectedCol > 5 {
-			a.selectedCol = 5
-		}
 	})
 	a.table.SetInputCapture(a.captureTableKeys)
 
@@ -161,20 +158,21 @@ func (a *App) buildUI() {
 }
 
 func (a *App) captureTableKeys(event *tcell.EventKey) *tcell.EventKey {
-	if event.Key() == tcell.KeyRight {
-		a.moveSelectionHorizontal(1)
-		return nil
-	}
-	if event.Key() == tcell.KeyLeft {
-		a.moveSelectionHorizontal(-1)
-		return nil
+	if event.Modifiers()&tcell.ModShift != 0 {
+		if event.Key() == tcell.KeyRight {
+			a.moveSelectionHorizontal(1)
+			return nil
+		}
+		if event.Key() == tcell.KeyLeft {
+			a.moveSelectionHorizontal(-1)
+			return nil
+		}
 	}
 	if event.Key() == tcell.KeyEnd {
 		if len(a.entries) == 0 {
 			return nil
 		}
-		_, col := a.table.GetSelection()
-		a.table.Select(len(a.entries), col)
+		a.table.Select(len(a.entries), 0)
 		return nil
 	}
 

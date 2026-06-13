@@ -80,7 +80,8 @@ If a query is slow or times out, the app falls back to bounded in-memory filteri
 - /: focus search
 - Esc: clear search or close details
 - Arrow Up/Down or j/k: move rows
-- Arrow Left/Right: move columns
+- Arrow Left/Right: scroll columns
+- Shift+Arrow Left/Right: select column
 - Enter: open selected file or folder
 - Space: toggle details panel
 - s: cycle sort column

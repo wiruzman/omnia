@@ -566,8 +566,7 @@ func TestEndKeyKeepsHighlightedColumn(t *testing.T) {
 
 	a.selectedCol = 2
 	a.renderTable()
-	typePhysicalCol := physicalColumnForLogical(a.visibleColumns(), 2)
-	a.table.Select(1, typePhysicalCol)
+	a.table.Select(1, 0)
 
 	a.captureTableKeys(tcell.NewEventKey(tcell.KeyEnd, 0, tcell.ModNone))
 
@@ -575,8 +574,8 @@ func TestEndKeyKeepsHighlightedColumn(t *testing.T) {
 	if row != len(entries) {
 		t.Fatalf("expected END to move to last row %d, got %d", len(entries), row)
 	}
-	if col != typePhysicalCol {
-		t.Fatalf("expected END to keep highlighted column %d, got %d", typePhysicalCol, col)
+	if col != 0 {
+		t.Fatalf("expected END to keep row selection at column 0, got %d", col)
 	}
 	if a.selected != len(entries)-1 {
 		t.Fatalf("expected selected index %d, got %d", len(entries)-1, a.selected)
@@ -586,7 +585,7 @@ func TestEndKeyKeepsHighlightedColumn(t *testing.T) {
 	}
 }
 
-func TestKeyboardRightScrollsViewportToWideColumn(t *testing.T) {
+func TestArrowRightUsesNativeHorizontalTableScroll(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
 	a.table.SetRect(0, 0, 50, 5)
@@ -603,10 +602,47 @@ func TestKeyboardRightScrollsViewportToWideColumn(t *testing.T) {
 		ModifiedAt: now,
 	}})
 
-	a.captureTableKeys(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
+	handler := a.table.InputHandler()
+	handler(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone), func(tview.Primitive) {})
+
+	if a.selectedCol != 0 {
+		t.Fatalf("expected plain right arrow to leave selected header column unchanged, got %d", a.selectedCol)
+	}
+	if got := a.table.GetColumnCount(); got != len(tableHeaders) {
+		t.Fatalf("expected all table columns to remain rendered, got %d", got)
+	}
+	row, col := a.table.GetSelection()
+	if row != 1 || col != 0 {
+		t.Fatalf("expected row selection to stay on column 0, got row=%d col=%d", row, col)
+	}
+	_, colOffset := a.table.GetOffset()
+	if colOffset != 1 {
+		t.Fatalf("expected plain right arrow to scroll viewport to offset 1, got %d", colOffset)
+	}
+}
+
+func TestShiftRightSelectsHeaderColumnWithoutScrolling(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.table.SetRect(0, 0, 50, 5)
+
+	now := time.Now()
+	seedEntries(t, a, []model.Entry{{
+		Path:       "/tmp/" + strings.Repeat("p", 90),
+		Name:       strings.Repeat("n", 40),
+		ParentPath: "/tmp",
+		RootPath:   "/tmp",
+		Type:       model.TypeFile,
+		Size:       90,
+		CreatedAt:  now,
+		ModifiedAt: now,
+	}})
+
+	handler := a.table.InputHandler()
+	handler(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModShift), func(tview.Primitive) {})
 
 	if a.selectedCol != 1 {
-		t.Fatalf("expected logical path column to be selected, got %d", a.selectedCol)
+		t.Fatalf("expected shift-right to select path header column, got %d", a.selectedCol)
 	}
 	if got := a.table.GetColumnCount(); got != len(tableHeaders) {
 		t.Fatalf("expected all table columns to remain rendered, got %d", got)
@@ -615,27 +651,24 @@ func TestKeyboardRightScrollsViewportToWideColumn(t *testing.T) {
 		t.Fatalf("expected path header to remain at canonical column 1, got %q", got)
 	}
 	row, col := a.table.GetSelection()
-	if row != 1 || col != 1 {
-		t.Fatalf("expected selected path cell at canonical column 1, got row=%d col=%d", row, col)
-	}
-	if got := a.logicalColumnForPhysical(col); got != 1 {
-		t.Fatalf("expected physical column %d to map to logical path column, got %d", col, got)
-	}
-
-	screen := tcell.NewSimulationScreen("UTF-8")
-	if err := screen.Init(); err != nil {
-		t.Fatalf("init simulation screen: %v", err)
-	}
-	defer screen.Fini()
-	screen.SetSize(50, 5)
-	a.table.Draw(screen)
-	_, colAtRightEdge := a.table.CellAt(49, 1)
-	if colAtRightEdge != 1 {
-		t.Fatalf("expected path column to fill right edge, got column %d", colAtRightEdge)
+	if row != 1 || col != 0 {
+		t.Fatalf("expected row selection to stay on column 0, got row=%d col=%d", row, col)
 	}
 	_, colOffset := a.table.GetOffset()
-	if colOffset != 1 {
-		t.Fatalf("expected viewport to scroll to path column offset 1, got %d", colOffset)
+	if colOffset != 0 {
+		t.Fatalf("expected shift-right to leave viewport offset unchanged, got %d", colOffset)
+	}
+}
+
+func TestShiftLeftWrapsSelectedHeaderColumn(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	seedEntries(t, a, []model.Entry{{Path: "/tmp/a", Name: "a", Type: model.TypeFile}})
+
+	a.captureTableKeys(tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModShift))
+
+	if a.selectedCol != len(tableHeaders)-1 {
+		t.Fatalf("expected shift-left from first column to wrap to %d, got %d", len(tableHeaders)-1, a.selectedCol)
 	}
 }
 

@@ -79,25 +79,11 @@ func (a *App) moveSelectionHorizontal(delta int) {
 	}
 	a.selected = row - 1
 	a.selectedCol = nextCol
-	a.visiblePriorityCol = nextCol
 	a.renderTable()
 }
 
 func (a *App) visibleColumns() []int {
-	priorityCol := a.visiblePriorityCol
-	if a.selectedCol > 2 {
-		priorityCol = a.selectedCol
-	}
-	if priorityCol <= 2 {
-		return []int{0, 1, 2, 3, 4, 5}
-	}
-	cols := []int{0, priorityCol}
-	for _, c := range []int{1, 2, 3, 4, 5} {
-		if c != priorityCol {
-			cols = append(cols, c)
-		}
-	}
-	return cols
+	return []int{0, 1, 2, 3, 4, 5}
 }
 
 func (a *App) logicalColumnForPhysical(physicalCol int) int {

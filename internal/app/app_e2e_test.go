@@ -428,6 +428,55 @@ func TestE2ESimulatedTerminalTUISearchRendersAndOpensResult(t *testing.T) {
 	}, "expected Enter in the rendered TUI table to open Alpha-Needle-Plan.md")
 }
 
+func TestE2ESearchAfterCachedClearFindsShortTerm(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.cfg.DebounceMs = 5
+
+	now := time.Now()
+	storeEntries := []model.Entry{
+		{
+			Path:       "/fixture/cache/alpha-initial.txt",
+			Name:       "alpha-initial.txt",
+			ParentPath: "/fixture/cache",
+			RootPath:   "/fixture",
+			Type:       model.TypeFile,
+			Size:       1,
+			CreatedAt:  now,
+			ModifiedAt: now,
+		},
+		{
+			Path:       "/fixture/tools/copilot-language-server",
+			Name:       "copilot-language-server",
+			ParentPath: "/fixture/tools",
+			RootPath:   "/fixture",
+			Type:       model.TypeFile,
+			Size:       2,
+			CreatedAt:  now,
+			ModifiedAt: now,
+		},
+	}
+	if err := a.store.UpsertBatch(context.Background(), now.UnixMicro(), storeEntries); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	a.rememberEmptyQueryResults("", a.sortSpec, storeEntries[:1], 1)
+
+	screen := startSimulatedTUI(t, a, 140, 35)
+	if !screen.InjectKeyBytes([]byte("alpha")) {
+		t.Fatal("failed to inject initial query")
+	}
+	waitForScreenText(t, screen, "alpha-initial.txt", 2*time.Second)
+
+	screen.InjectKey(tcell.KeyEsc, 0, tcell.ModNone)
+	waitForScreenText(t, screen, "alpha-initial.txt", 2*time.Second)
+
+	if !screen.InjectKeyBytes([]byte("cop")) {
+		t.Fatal("failed to inject short query")
+	}
+	waitForScreenText(t, screen, "copilot-language-server", 2*time.Second)
+	waitForScreenText(t, screen, "query: cop", 2*time.Second)
+}
+
 func namesOf(entries []model.Entry) []string {
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {

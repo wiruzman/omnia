@@ -293,12 +293,14 @@ func (a *App) applyResults(entries []model.Entry, total int) {
 	if a.resetSelectionOnNextResults {
 		a.selected = 0
 		a.selectedCol = 0
+		a.horizontalScrollCol = 0
 		a.table.SetOffset(0, 0)
 		a.resetSelectionOnNextResults = false
 	} else if row, _ := a.table.GetSelection(); row > 0 && row-1 < len(a.entries) {
 		a.selected = row - 1
 	} else if !hadEntries && len(entries) > 0 {
 		a.selected = 0
+		a.horizontalScrollCol = 0
 		a.table.SetOffset(0, 0)
 	}
 

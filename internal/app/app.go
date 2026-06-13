@@ -41,6 +41,7 @@ type App struct {
 	entries                     []model.Entry
 	selected                    int
 	selectedCol                 int
+	horizontalScrollCol         int
 	query                       string
 	sortSpec                    sorter.SortSpec
 	resetSelectionOnNextResults bool

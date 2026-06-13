@@ -35,9 +35,12 @@ func (a *App) renderHeader(cols []int) {
 
 func (a *App) renderTable() {
 	a.selectedCol = clampColumnIndex(a.selectedCol)
+	a.horizontalScrollCol = clampColumnIndex(a.horizontalScrollCol)
 	cols := a.visibleColumns()
+	rowOffset, _ := a.table.GetOffset()
 
 	a.table.Clear()
+	a.table.SetOffset(rowOffset, 0)
 	a.renderHeader(cols)
 	for i, e := range a.entries {
 		row := i + 1
@@ -76,8 +79,23 @@ func (a *App) moveSelectionHorizontal(delta int) {
 	a.renderTable()
 }
 
+func (a *App) scrollColumnsHorizontal(delta int) {
+	nextCol := a.horizontalScrollCol + delta
+	if nextCol < 0 {
+		nextCol = 0
+	}
+	if nextCol >= len(tableHeaders) {
+		nextCol = len(tableHeaders) - 1
+	}
+	if nextCol == a.horizontalScrollCol {
+		return
+	}
+	a.horizontalScrollCol = nextCol
+	a.renderTable()
+}
+
 func (a *App) visibleColumns() []int {
-	return allTableColumns()
+	return tableColumnsFrom(a.horizontalScrollCol)
 }
 
 func (a *App) logicalColumnForPhysical(physicalCol int) int {
@@ -98,9 +116,14 @@ func physicalColumnForLogical(cols []int, logicalCol int) int {
 }
 
 func allTableColumns() []int {
-	cols := make([]int, len(tableHeaders))
+	return tableColumnsFrom(0)
+}
+
+func tableColumnsFrom(startCol int) []int {
+	startCol = clampColumnIndex(startCol)
+	cols := make([]int, len(tableHeaders)-startCol)
 	for i := range cols {
-		cols[i] = i
+		cols[i] = startCol + i
 	}
 	return cols
 }

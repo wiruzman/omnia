@@ -586,6 +586,58 @@ func TestEndKeyKeepsHighlightedColumn(t *testing.T) {
 	}
 }
 
+func TestKeyboardRightShowsClippedColumnFullWidth(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.table.SetRect(0, 0, 50, 5)
+
+	now := time.Now()
+	seedEntries(t, a, []model.Entry{{
+		Path:       "/tmp/" + strings.Repeat("p", 90),
+		Name:       strings.Repeat("n", 40),
+		ParentPath: "/tmp",
+		RootPath:   "/tmp",
+		Type:       model.TypeFile,
+		Size:       90,
+		CreatedAt:  now,
+		ModifiedAt: now,
+	}})
+
+	a.captureTableKeys(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone))
+
+	if a.selectedCol != 1 {
+		t.Fatalf("expected logical path column to be selected, got %d", a.selectedCol)
+	}
+	if a.visibleStartCol != 1 {
+		t.Fatalf("expected visible columns to start at path, got %d", a.visibleStartCol)
+	}
+	if got := a.table.GetColumnCount(); got != 1 {
+		t.Fatalf("expected clipped selected column to render alone, got %d columns", got)
+	}
+	if got := a.table.GetCell(0, 0).Text; !strings.Contains(got, "Path") {
+		t.Fatalf("expected path header to render as the only visible column, got %q", got)
+	}
+	row, col := a.table.GetSelection()
+	if row != 1 || col != 0 {
+		t.Fatalf("expected selected path cell at physical column 0, got row=%d col=%d", row, col)
+	}
+	if got := a.logicalColumnForPhysical(col); got != 1 {
+		t.Fatalf("expected physical column %d to map to logical path column, got %d", col, got)
+	}
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer screen.Fini()
+	screen.SetSize(50, 5)
+	a.table.Draw(screen)
+	_, colAtRightEdge := a.table.CellAt(49, 1)
+	if colAtRightEdge != 0 {
+		t.Fatalf("expected path column to fill right edge, got column %d", colAtRightEdge)
+	}
+}
+
 func TestTypingRuneOnTableDoesNotAutoFocusSearch(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)

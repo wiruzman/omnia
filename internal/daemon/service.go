@@ -444,6 +444,9 @@ func rootForPath(roots []string, path string) string {
 }
 
 func (s *Service) readonlyIndexPath() string {
+	if store.UsesDirectReadOnly(s.cfg.StoreBackend) {
+		return s.cfg.IndexDBPath
+	}
 	return s.cfg.IndexDBPath + ".readonly"
 }
 
@@ -483,6 +486,10 @@ func (s *Service) publishStartupPreviewCache(ctx context.Context) error {
 }
 
 func (s *Service) publishReadonlySnapshotOnce() error {
+	if store.UsesDirectReadOnly(s.cfg.StoreBackend) {
+		return nil
+	}
+
 	src := filepath.Clean(s.cfg.IndexDBPath)
 	dst := filepath.Clean(s.readonlyIndexPath())
 	tmp := dst + ".tmp"

@@ -72,7 +72,10 @@ func New() (*App, error) {
 		return nil, err
 	}
 
-	indexPath := cfg.IndexDBPath + ".readonly"
+	indexPath := cfg.IndexDBPath
+	if !store.UsesDirectReadOnly(cfg.StoreBackend) {
+		indexPath += ".readonly"
+	}
 	openStore := store.OpenReadOnlyWithBackend
 
 	st, err := openStore(indexPath, cfg.StoreBackend)
@@ -205,7 +208,10 @@ func (a *App) storeDeletePathPrefix(ctx context.Context, path string) error {
 }
 
 func (a *App) refreshReadonlySnapshotStore() error {
-	readonlyPath := a.cfg.IndexDBPath + ".readonly"
+	readonlyPath := a.cfg.IndexDBPath
+	if !store.UsesDirectReadOnly(a.cfg.StoreBackend) {
+		readonlyPath += ".readonly"
+	}
 	newStore, err := store.OpenReadOnlyWithBackend(readonlyPath, a.cfg.StoreBackend)
 	if err != nil {
 		return err

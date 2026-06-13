@@ -51,8 +51,8 @@ func Default() (Config, error) {
 			".Trash",
 			"Trash",
 		},
-		IndexDBPath:       "index.bleve",
-		StoreBackend:      "bleve",
+		IndexDBPath:       "index.sqlite",
+		StoreBackend:      "sqlite",
 		MaxResults:        5000,
 		DebounceMs:        120,
 		ScanBatchSize:     1000,
@@ -165,13 +165,18 @@ func normalize(cfg Config) Config {
 		cfg.IndexDBPath = filepath.Clean(cfg.IndexDBPath)
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.StoreBackend)) {
-	case "", "bleve":
+	case "", "sqlite", "fts5", "sqlite_fts5", "sqlite-fts5":
+		cfg.StoreBackend = "sqlite"
+	case "bleve":
 		cfg.StoreBackend = "bleve"
 	default:
 		cfg.StoreBackend = strings.ToLower(strings.TrimSpace(cfg.StoreBackend))
 	}
-	if cfg.StoreBackend == "bleve" {
+	switch cfg.StoreBackend {
+	case "bleve":
 		cfg.IndexDBPath = coerceBleveIndexPath(cfg.IndexDBPath)
+	case "sqlite":
+		cfg.IndexDBPath = coerceSQLiteIndexPath(cfg.IndexDBPath)
 	}
 	if cfg.DaemonDir != "" {
 		cfg.DaemonDir = filepath.Clean(cfg.DaemonDir)
@@ -221,6 +226,22 @@ func coerceBleveIndexPath(path string) string {
 			return "index.bleve"
 		}
 		return filepath.Join(dir, "index.bleve")
+	}
+	return clean
+}
+
+func coerceSQLiteIndexPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "index.sqlite"
+	}
+	clean := filepath.Clean(path)
+	if strings.EqualFold(filepath.Ext(clean), ".bleve") {
+		dir := filepath.Dir(clean)
+		if dir == "." {
+			return "index.sqlite"
+		}
+		return filepath.Join(dir, "index.sqlite")
 	}
 	return clean
 }

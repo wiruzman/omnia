@@ -344,6 +344,40 @@ func TestApplyResultsResetsSelectionAfterClear(t *testing.T) {
 	}
 }
 
+func TestApplyFirstResultsStartsAtTopAndKeepsConfiguredSortColumn(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.sortSpec = sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc}
+	a.selectedCol = sortColumnIndex(a.sortSpec.Column)
+
+	// tview marks a short, header-only table as tracking the end. The first
+	// real result set must not inherit that bottom offset or its synthetic row.
+	a.table.SetOffset(365, 0)
+	a.table.Select(1, 0)
+
+	now := time.Now()
+	entries := []model.Entry{
+		{Path: "/tmp/large", Name: "large", Type: model.TypeFile, Size: 90, CreatedAt: now, ModifiedAt: now},
+		{Path: "/tmp/small", Name: "small", Type: model.TypeFile, Size: 10, CreatedAt: now, ModifiedAt: now},
+	}
+
+	a.applyResults(entries, len(entries))
+
+	if a.selected != 0 {
+		t.Fatalf("expected first result to be selected, got %d", a.selected)
+	}
+	if a.selectedCol != sortColumnIndex(sorter.SortSize) {
+		t.Fatalf("expected configured size sort column to be preserved, got %d", a.selectedCol)
+	}
+	rowOffset, colOffset := a.table.GetOffset()
+	if rowOffset != 0 || colOffset != 0 {
+		t.Fatalf("expected first results to start at top offset, got (%d,%d)", rowOffset, colOffset)
+	}
+	if got := a.table.GetCell(1, 1).Text; got != "90 B" {
+		t.Fatalf("expected size column to stay visible beside name, got %q", got)
+	}
+}
+
 func TestSortKeyMovesSelectedColumnToSortColumn(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)

@@ -276,7 +276,9 @@ func (a *App) handleQueryChanged(text string) {
 	if !nextHasQuery {
 		// Clearing query should restore full-list results immediately.
 		a.invalidatePendingRefreshes()
-		a.restoreEmptyQueryResults(a.sortSpec)
+		if !a.restoreEmptyQueryResults(a.sortSpec) {
+			a.applyWarmStartCache()
+		}
 		a.requestRefreshAsync(a.query, a.sortSpec)
 	} else {
 		a.debounceRefresh()

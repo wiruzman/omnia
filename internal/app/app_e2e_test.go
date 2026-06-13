@@ -352,7 +352,6 @@ func TestE2EStartupPreviewRendersBeforeFullRefreshCompletes(t *testing.T) {
 	a := newTestApp(t, sys)
 	a.sortSpec = sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc}
 	a.selectedCol = 0
-	a.visiblePriorityCol = sortColumnIndex(a.sortSpec.Column)
 
 	now := time.Now()
 	cacheResult := store.QueryResult{

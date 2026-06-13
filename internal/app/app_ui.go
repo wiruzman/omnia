@@ -196,14 +196,12 @@ func (a *App) captureTableKeys(event *tcell.EventKey) *tcell.EventKey {
 		case 's':
 			a.sortSpec = a.sortSpec.NextColumn()
 			a.selectedCol = sortColumnIndex(a.sortSpec.Column)
-			a.visiblePriorityCol = a.selectedCol
 			a.persistSortSpec()
 			a.refreshData(context.Background())
 			return nil
 		case 'S':
 			a.sortSpec = a.sortSpec.ToggleDirection()
 			a.selectedCol = sortColumnIndex(a.sortSpec.Column)
-			a.visiblePriorityCol = a.selectedCol
 			a.persistSortSpec()
 			a.refreshData(context.Background())
 			return nil
@@ -271,7 +269,6 @@ func (a *App) handleQueryChanged(text string) {
 	a.query = text
 	// While searching, keep the table on leading columns so result changes are visible.
 	a.selectedCol = 0
-	a.visiblePriorityCol = 0
 	if !nextHasQuery {
 		// Clearing query should restore full-list results immediately.
 		a.invalidatePendingRefreshes()

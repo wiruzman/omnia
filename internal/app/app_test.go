@@ -344,11 +344,12 @@ func TestApplyResultsResetsSelectionAfterClear(t *testing.T) {
 	}
 }
 
-func TestApplyFirstResultsStartsAtTopAndKeepsConfiguredSortColumn(t *testing.T) {
+func TestApplyFirstResultsStartsAtTopOnNameAndKeepsConfiguredSortColumnVisible(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
 	a.sortSpec = sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc}
-	a.selectedCol = sortColumnIndex(a.sortSpec.Column)
+	a.selectedCol = 0
+	a.visiblePriorityCol = sortColumnIndex(a.sortSpec.Column)
 
 	// tview marks a short, header-only table as tracking the end. The first
 	// real result set must not inherit that bottom offset or its synthetic row.
@@ -366,8 +367,15 @@ func TestApplyFirstResultsStartsAtTopAndKeepsConfiguredSortColumn(t *testing.T) 
 	if a.selected != 0 {
 		t.Fatalf("expected first result to be selected, got %d", a.selected)
 	}
-	if a.selectedCol != sortColumnIndex(sorter.SortSize) {
-		t.Fatalf("expected configured size sort column to be preserved, got %d", a.selectedCol)
+	if a.selectedCol != 0 {
+		t.Fatalf("expected cursor to start on name column, got %d", a.selectedCol)
+	}
+	if a.visiblePriorityCol != sortColumnIndex(sorter.SortSize) {
+		t.Fatalf("expected configured size sort column to stay visible, got %d", a.visiblePriorityCol)
+	}
+	row, col := a.table.GetSelection()
+	if row != 1 || col != 0 {
+		t.Fatalf("expected table cursor at first name cell, got row=%d col=%d", row, col)
 	}
 	rowOffset, colOffset := a.table.GetOffset()
 	if rowOffset != 0 || colOffset != 0 {
@@ -375,6 +383,71 @@ func TestApplyFirstResultsStartsAtTopAndKeepsConfiguredSortColumn(t *testing.T) 
 	}
 	if got := a.table.GetCell(1, 1).Text; got != "90 B" {
 		t.Fatalf("expected size column to stay visible beside name, got %q", got)
+	}
+}
+
+func TestNewStartsOnNameColumnWithConfiguredSizeSort(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfgPath, err := config.ConfigPath()
+	if err != nil {
+		t.Fatalf("config path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	cfg := config.Config{
+		IncludePaths:  []string{home},
+		ExcludeGlobs:  []string{".git"},
+		IndexDBPath:   "index.bleve",
+		StoreBackend:  "bleve",
+		MaxResults:    100,
+		DebounceMs:    50,
+		ScanBatchSize: 100,
+		DaemonDir:     "daemon",
+		SortColumn:    "size",
+		SortDirection: "DESC",
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	readonlyPath := loaded.IndexDBPath + ".readonly"
+	roStore, err := store.Open(readonlyPath)
+	if err != nil {
+		t.Fatalf("open readonly snapshot store: %v", err)
+	}
+	if err := roStore.Close(); err != nil {
+		t.Fatalf("close readonly snapshot store: %v", err)
+	}
+
+	a, err := New()
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	defer func() {
+		if err := a.Close(); err != nil {
+			t.Fatalf("close app: %v", err)
+		}
+	}()
+
+	if a.sortSpec.Column != sorter.SortSize {
+		t.Fatalf("expected configured size sort, got %s", a.sortSpec.Column)
+	}
+	if a.selectedCol != 0 {
+		t.Fatalf("expected startup cursor on name column, got %d", a.selectedCol)
+	}
+	if a.visiblePriorityCol != sortColumnIndex(sorter.SortSize) {
+		t.Fatalf("expected size column to be prioritized in startup layout, got %d", a.visiblePriorityCol)
+	}
+	cols := a.visibleColumns()
+	if len(cols) < 2 || cols[0] != 0 || cols[1] != sortColumnIndex(sorter.SortSize) {
+		t.Fatalf("expected startup layout to show name then size, got %+v", cols)
 	}
 }
 
@@ -389,6 +462,9 @@ func TestSortKeyMovesSelectedColumnToSortColumn(t *testing.T) {
 	if a.selectedCol != sortColumnIndex(sorter.SortPath) {
 		t.Fatalf("expected selected column to follow path sort, got %d", a.selectedCol)
 	}
+	if a.visiblePriorityCol != sortColumnIndex(sorter.SortPath) {
+		t.Fatalf("expected visible priority column to follow path sort, got %d", a.visiblePriorityCol)
+	}
 
 	a.captureTableKeys(tcell.NewEventKey(tcell.KeyRune, 's', tcell.ModNone))
 	if a.sortSpec.Column != sorter.SortSize {
@@ -396,6 +472,9 @@ func TestSortKeyMovesSelectedColumnToSortColumn(t *testing.T) {
 	}
 	if a.selectedCol != sortColumnIndex(sorter.SortSize) {
 		t.Fatalf("expected selected column to follow size sort, got %d", a.selectedCol)
+	}
+	if a.visiblePriorityCol != sortColumnIndex(sorter.SortSize) {
+		t.Fatalf("expected visible priority column to follow size sort, got %d", a.visiblePriorityCol)
 	}
 }
 

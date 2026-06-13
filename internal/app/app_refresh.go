@@ -293,6 +293,7 @@ func (a *App) applyResults(entries []model.Entry, total int) {
 	if a.resetSelectionOnNextResults {
 		a.selected = 0
 		a.selectedCol = 0
+		a.visiblePriorityCol = 0
 		a.visibleStartCol = 0
 		a.table.SetOffset(0, 0)
 		a.resetSelectionOnNextResults = false

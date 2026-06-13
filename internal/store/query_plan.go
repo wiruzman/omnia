@@ -1,0 +1,80 @@
+package store
+
+import (
+	"strings"
+	"unicode/utf8"
+
+	"github.com/blevesearch/bleve/v2"
+	querypkg "github.com/blevesearch/bleve/v2/search/query"
+)
+
+const (
+	minContainsRunes      = 3
+	minBroadPathRunes     = 4
+	shortPrefixEnoughRows = 200
+)
+
+type queryPlan struct {
+	query            string
+	terms            []string
+	pathLike         bool
+	absolutePathLike bool
+}
+
+func planQuery(query string) queryPlan {
+	qLower := strings.ToLower(strings.TrimSpace(query))
+	return queryPlan{
+		query:            qLower,
+		terms:            strings.Fields(qLower),
+		pathLike:         strings.Contains(qLower, "/"),
+		absolutePathLike: strings.HasPrefix(qLower, "/"),
+	}
+}
+
+func (p queryPlan) allowNameContains() bool {
+	return !p.pathLike && runeLen(p.query) >= minContainsRunes
+}
+
+func (p queryPlan) allowPathContains() bool {
+	if p.pathLike {
+		return true
+	}
+	return runeLen(p.query) >= minBroadPathRunes
+}
+
+func (p queryPlan) allowAllTermContains() bool {
+	if len(p.terms) < 2 {
+		return false
+	}
+	for _, term := range p.terms {
+		if runeLen(term) < minContainsRunes {
+			return false
+		}
+	}
+	return true
+}
+
+func (p queryPlan) shouldStopAfterPrefix(entries, limit int) bool {
+	if p.pathLike || runeLen(p.query) >= minBroadPathRunes {
+		return false
+	}
+	return entries >= minInt(limit, shortPrefixEnoughRows)
+}
+
+func runeLen(value string) int {
+	return utf8.RuneCountInString(value)
+}
+
+func bleveContainsQuery(field string, value string) querypkg.Query {
+	q := bleve.NewWildcardQuery("*" + value + "*")
+	q.SetField(field)
+	return q
+}
+
+func bleveContainsAllQuery(field string, terms []string) querypkg.Query {
+	queries := make([]querypkg.Query, 0, len(terms))
+	for _, term := range terms {
+		queries = append(queries, bleveContainsQuery(field, term))
+	}
+	return bleve.NewConjunctionQuery(queries...)
+}

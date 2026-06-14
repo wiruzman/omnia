@@ -11,14 +11,16 @@ Omnia is a keyboard-first terminal file search app for macOS. It keeps a local S
 - Reveals items in Finder.
 - Copies selected path to clipboard.
 - Deletes selected items by moving them to Trash (with confirmation).
+- Shows daemon indexing status and per-include-path scan progress.
+- Uses a startup preview cache so the initial empty search view can warm quickly.
 - Persists index and settings between runs.
 
 ## Architecture at a glance
 
 - TUI: Go + tview/tcell.
 - Store: SQLite FTS5 trigram index.
-- Scanner/indexer: filesystem walk + batched upserts.
-- Daemon: watches configured roots for incremental updates and runs reindex only when triggered manually or when bootstrapping an empty index.
+- Scanner/indexer: filesystem walk + batched upserts, per-root progress, and resumable full reindex.
+- Daemon: watches configured roots for incremental updates, publishes startup preview snapshots, and runs reindex only when triggered manually or when bootstrapping an empty index.
 
 ## Requirements
 
@@ -77,6 +79,9 @@ If a live query is slow or times out, the app shows no results for that query in
 - The TUI reads daemon status and triggers reindex requests through a trigger file.
 - The daemon applies incremental updates from filesystem events.
 - The daemon starts a full reindex automatically when it detects an empty index.
+- The daemon tracks per-include-path scan progress for the TUI progress view.
+- Interrupted full reindexes can resume from saved daemon state; fresh reindex clears that resume state and starts from scratch.
+- The daemon publishes a startup preview cache after indexing snapshots so the TUI can show initial empty-query results quickly.
 - The daemon writes JSON-line logs with severity, pid, and component fields, and rotates them by size for service-mode troubleshooting.
 
 ## Keyboard shortcuts
@@ -91,6 +96,7 @@ If a live query is slow or times out, the app shows no results for that query in
 - Space: toggle details panel
 - s: cycle sort column
 - Shift+s: reverse sort direction
+- p: toggle include path progress view
 - r: toggle daemon reindex (stop if running, resume if stopped)
 - Shift+r: fresh reindex from scratch
 - f: reveal in Finder

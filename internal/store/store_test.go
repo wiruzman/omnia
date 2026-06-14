@@ -13,7 +13,7 @@ import (
 
 func TestStoreUpsertQueryAndCleanup(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestStoreUpsertQueryAndCleanup(t *testing.T) {
 
 func TestStoreCleanupKeepsEntriesFromCurrentScan(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestStoreCleanupKeepsEntriesFromCurrentScan(t *testing.T) {
 
 func TestStoreQueryContainsForMediumShortTerms(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestStoreQueryContainsForMediumShortTerms(t *testing.T) {
 
 func TestStoreQueryIsCaseInsensitiveForDocker(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestStoreQueryIsCaseInsensitiveForDocker(t *testing.T) {
 
 func TestStoreCountByRoots(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestStoreCountByRoots(t *testing.T) {
 
 func TestStoreQueryHonorsCanceledContext(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestStoreQueryHonorsCanceledContext(t *testing.T) {
 
 func TestStoreQueryShortPrefixWindowSkipsBroadContains(t *testing.T) {
 	ctx := context.Background()
-	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -78,16 +78,10 @@ func New() (*App, error) {
 		return nil, err
 	}
 
-	indexPath := cfg.IndexDBPath
-	if !store.UsesDirectReadOnly(cfg.StoreBackend) {
-		indexPath += ".readonly"
-	}
-	openStore := store.OpenReadOnlyWithBackend
-
-	st, err := openStore(indexPath, cfg.StoreBackend)
+	st, err := store.OpenSQLiteReadOnly(cfg.IndexDBPath)
 	if err != nil {
-		// First run may not have a readonly snapshot yet; create it lazily.
-		st, err = store.OpenWithBackend(indexPath, cfg.StoreBackend)
+		// First run may not have an index yet; create it lazily.
+		st, err = store.OpenSQLite(cfg.IndexDBPath)
 	}
 	if err != nil {
 		return nil, err
@@ -219,12 +213,8 @@ func (a *App) storeDeletePathPrefix(ctx context.Context, path string) error {
 	return a.store.DeletePathPrefix(ctx, path)
 }
 
-func (a *App) refreshReadonlySnapshotStore() error {
-	readonlyPath := a.cfg.IndexDBPath
-	if !store.UsesDirectReadOnly(a.cfg.StoreBackend) {
-		readonlyPath += ".readonly"
-	}
-	newStore, err := store.OpenReadOnlyWithBackend(readonlyPath, a.cfg.StoreBackend)
+func (a *App) refreshStoreConnection() error {
+	newStore, err := store.OpenSQLiteReadOnly(a.cfg.IndexDBPath)
 	if err != nil {
 		return err
 	}

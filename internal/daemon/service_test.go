@@ -2,10 +2,8 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"io"
 	"log"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -126,30 +124,6 @@ func TestStatusEqualDetectsPathProgressChanges(t *testing.T) {
 	}
 }
 
-func TestIsRetryableSnapshotError(t *testing.T) {
-	if !isRetryableSnapshotError(os.ErrNotExist) {
-		t.Fatal("expected os.ErrNotExist to be retryable")
-	}
-	if !isRetryableSnapshotError(errors.New("open /tmp/x: no such file or directory")) {
-		t.Fatal("expected missing file message to be retryable")
-	}
-	if isRetryableSnapshotError(errors.New("permission denied")) {
-		t.Fatal("expected non-missing-file error to be non-retryable")
-	}
-}
-
-func TestReadonlyIndexPathUsesDirectSQLitePath(t *testing.T) {
-	sqliteSvc := &Service{cfg: config.Config{IndexDBPath: "/tmp/index.sqlite", StoreBackend: "sqlite"}}
-	if got := sqliteSvc.readonlyIndexPath(); got != "/tmp/index.sqlite" {
-		t.Fatalf("expected sqlite readonly path to be direct DB path, got %q", got)
-	}
-
-	bleveSvc := &Service{cfg: config.Config{IndexDBPath: "/tmp/index.bleve", StoreBackend: "bleve"}}
-	if got := bleveSvc.readonlyIndexPath(); got != "/tmp/index.bleve.readonly" {
-		t.Fatalf("expected bleve readonly path to be snapshot path, got %q", got)
-	}
-}
-
 func TestShouldRefreshIndexedTotal(t *testing.T) {
 	now := time.Unix(1714000000, 0)
 	ready := now.Add(-6 * time.Second)
@@ -181,7 +155,7 @@ func TestShouldRefreshIndexedTotal(t *testing.T) {
 
 func TestPublishStartupPreviewCacheUsesConfiguredSort(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(filepath.Join(t.TempDir(), "index.bleve"))
+	st, err := store.OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

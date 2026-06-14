@@ -37,7 +37,7 @@ const statusHeartbeatInterval = 15 * time.Second
 const incrementalFlushDebounce = 900 * time.Millisecond
 
 func New(cfg config.Config, logger *log.Logger) (*Service, error) {
-	st, err := store.OpenWithBackend(cfg.IndexDBPath, cfg.StoreBackend)
+	st, err := store.OpenSQLite(cfg.IndexDBPath)
 	if err != nil {
 		return nil, err
 	}
@@ -92,14 +92,14 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 
 	if !s.indexer.IsRunning() {
-		if err := s.publishReadonlySnapshot(ctx); err != nil {
-			s.logger.Printf("publish readonly snapshot failed: %v", err)
+		if err := s.publishSearchSnapshot(ctx); err != nil {
+			s.logger.Printf("publish search snapshot failed: %v", err)
 		} else {
 			snapshotDirty = false
 			snapshotSeq++
 		}
 	} else {
-		s.logger.Printf("skipping readonly snapshot publish while initial indexing is running")
+		s.logger.Printf("skipping search snapshot publish while initial indexing is running")
 	}
 
 	events := make(chan notify.EventInfo, 8192)
@@ -238,8 +238,8 @@ func (s *Service) Run(ctx context.Context) error {
 				}
 			}
 			if !idx.Running && snapshotDirty {
-				if err := s.publishReadonlySnapshot(ctx); err != nil {
-					s.logger.Printf("publish readonly snapshot failed: %v", err)
+				if err := s.publishSearchSnapshot(ctx); err != nil {
+					s.logger.Printf("publish search snapshot failed: %v", err)
 				} else {
 					snapshotDirty = false
 					snapshotSeq++
@@ -443,33 +443,11 @@ func rootForPath(roots []string, path string) string {
 	return best
 }
 
-func (s *Service) readonlyIndexPath() string {
-	if store.UsesDirectReadOnly(s.cfg.StoreBackend) {
-		return s.cfg.IndexDBPath
+func (s *Service) publishSearchSnapshot(ctx context.Context) error {
+	if err := s.publishStartupPreviewCache(ctx); err != nil {
+		s.logger.Printf("publish startup preview cache failed: %v", err)
 	}
-	return s.cfg.IndexDBPath + ".readonly"
-}
-
-func (s *Service) publishReadonlySnapshot(ctx context.Context) error {
-	const maxAttempts = 5
-	const baseDelay = 120 * time.Millisecond
-
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		err := s.publishReadonlySnapshotOnce()
-		if err == nil {
-			if err := s.publishStartupPreviewCache(ctx); err != nil {
-				s.logger.Printf("publish startup preview cache failed: %v", err)
-			}
-			return nil
-		}
-		lastErr = err
-		if !isRetryableSnapshotError(err) || attempt == maxAttempts {
-			return err
-		}
-		time.Sleep(time.Duration(attempt) * baseDelay)
-	}
-	return lastErr
+	return nil
 }
 
 func (s *Service) publishStartupPreviewCache(ctx context.Context) error {
@@ -483,99 +461,6 @@ func (s *Service) publishStartupPreviewCache(ctx context.Context) error {
 		return err
 	}
 	return startupcache.Save(startupcache.Path(s.cfg), sortSpec, limit, res)
-}
-
-func (s *Service) publishReadonlySnapshotOnce() error {
-	if store.UsesDirectReadOnly(s.cfg.StoreBackend) {
-		return nil
-	}
-
-	src := filepath.Clean(s.cfg.IndexDBPath)
-	dst := filepath.Clean(s.readonlyIndexPath())
-	tmp := dst + ".tmp"
-
-	if err := os.RemoveAll(tmp); err != nil {
-		return err
-	}
-	if err := copyDir(src, tmp); err != nil {
-		_ = os.RemoveAll(tmp)
-		return err
-	}
-	if err := os.RemoveAll(dst); err != nil {
-		_ = os.RemoveAll(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.RemoveAll(tmp)
-		return err
-	}
-	return nil
-}
-
-func isRetryableSnapshotError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "no such file") || strings.Contains(msg, "no such file or directory")
-}
-
-func copyDir(src, dst string) error {
-	info, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("source is not a directory: %s", src)
-	}
-
-	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
-		return err
-	}
-
-	return filepath.WalkDir(src, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			info, err := d.Info()
-			if err != nil {
-				return err
-			}
-			return os.MkdirAll(target, info.Mode().Perm())
-		}
-
-		srcFile, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer srcFile.Close()
-
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		dstFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(dstFile, srcFile); err != nil {
-			_ = dstFile.Close()
-			return err
-		}
-		return dstFile.Close()
-	})
 }
 
 func RunMain(ctx context.Context) error {

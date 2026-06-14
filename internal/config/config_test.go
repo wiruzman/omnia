@@ -18,9 +18,6 @@ func TestDefaultScanThrottle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default config: %v", err)
 	}
-	if cfg.StoreBackend != "sqlite" {
-		t.Fatalf("expected default store backend sqlite, got %q", cfg.StoreBackend)
-	}
 	if cfg.IndexDBPath != "index.sqlite" {
 		t.Fatalf("expected default index_db_path index.sqlite, got %q", cfg.IndexDBPath)
 	}
@@ -69,8 +66,7 @@ func TestLoadResolvesRelativeRuntimePaths(t *testing.T) {
 
 	err = Save(cfgPath, Config{
 		IncludePaths:  []string{"/Volumes"},
-		IndexDBPath:   "index.bleve",
-		StoreBackend:  "bleve",
+		IndexDBPath:   "index.sqlite",
 		MaxResults:    10,
 		DebounceMs:    10,
 		ScanBatchSize: 10,
@@ -88,7 +84,7 @@ func TestLoadResolvesRelativeRuntimePaths(t *testing.T) {
 	}
 
 	configBase := filepath.Join(home, ".config", "omnia-search")
-	if cfg.IndexDBPath != filepath.Join(configBase, "index.bleve") {
+	if cfg.IndexDBPath != filepath.Join(configBase, "index.sqlite") {
 		t.Fatalf("unexpected index_db_path: %q", cfg.IndexDBPath)
 	}
 	if cfg.DaemonDir != filepath.Join(configBase, "daemon") {
@@ -99,29 +95,9 @@ func TestLoadResolvesRelativeRuntimePaths(t *testing.T) {
 	}
 }
 
-func TestNormalizeCoercesBleveDBPath(t *testing.T) {
-	cfg := normalize(Config{StoreBackend: "bleve", IndexDBPath: "custom.db"})
-	if cfg.IndexDBPath != filepath.Join(".", "index.bleve") && cfg.IndexDBPath != "index.bleve" {
-		t.Fatalf("expected .db path to be coerced to index.bleve, got %q", cfg.IndexDBPath)
-	}
-
-	cfg = normalize(Config{StoreBackend: "bleve", IndexDBPath: "/tmp/custom.db"})
-	if cfg.IndexDBPath != "/tmp/index.bleve" {
-		t.Fatalf("expected absolute .db path to be coerced, got %q", cfg.IndexDBPath)
-	}
-}
-
-func TestNormalizeCoercesSQLiteBlevePath(t *testing.T) {
-	cfg := normalize(Config{StoreBackend: "sqlite", IndexDBPath: "index.bleve"})
+func TestNormalizeDefaultsIndexPath(t *testing.T) {
+	cfg := normalize(Config{})
 	if cfg.IndexDBPath != filepath.Join(".", "index.sqlite") && cfg.IndexDBPath != "index.sqlite" {
-		t.Fatalf("expected .bleve path to be coerced to index.sqlite, got %q", cfg.IndexDBPath)
-	}
-
-	cfg = normalize(Config{StoreBackend: "fts5", IndexDBPath: "/tmp/custom.bleve"})
-	if cfg.StoreBackend != "sqlite" {
-		t.Fatalf("expected fts5 alias to normalize to sqlite, got %q", cfg.StoreBackend)
-	}
-	if cfg.IndexDBPath != "/tmp/index.sqlite" {
-		t.Fatalf("expected absolute .bleve path to be coerced, got %q", cfg.IndexDBPath)
+		t.Fatalf("expected default index path, got %q", cfg.IndexDBPath)
 	}
 }

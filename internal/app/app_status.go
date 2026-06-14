@@ -114,7 +114,7 @@ func (a *App) currentIndexerStatus() indexer.Status {
 	}
 	a.lastDaemonStatus = st
 	a.hasDaemonStatus = true
-	a.maybeRefreshReadonlyStore(st)
+	a.maybeRefreshStoreConnection(st)
 	return indexer.Status{
 		Running:      st.Indexing,
 		Scanned:      st.Scanned,
@@ -125,7 +125,7 @@ func (a *App) currentIndexerStatus() indexer.Status {
 	}
 }
 
-func (a *App) maybeRefreshReadonlyStore(st daemonstate.Status) {
+func (a *App) maybeRefreshStoreConnection(st daemonstate.Status) {
 	if st.SnapshotSeq <= 0 {
 		return
 	}
@@ -138,8 +138,8 @@ func (a *App) maybeRefreshReadonlyStore(st daemonstate.Status) {
 	}
 	a.snapshotRefreshAttemptSeq = st.SnapshotSeq
 	a.lastSnapshotRefreshAttempt = now
-	if err := a.refreshReadonlySnapshotStore(); err != nil {
-		a.logger.Printf("refresh readonly snapshot store failed: %v", err)
+	if err := a.refreshStoreConnection(); err != nil {
+		a.logger.Printf("refresh store connection failed: %v", err)
 		return
 	}
 	a.daemonSnapshotSeq = st.SnapshotSeq

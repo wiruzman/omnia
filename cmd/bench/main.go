@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -68,13 +67,7 @@ func main() {
 		fmt.Printf("index dir: %s (temporary)\n\n", workDir)
 	}
 
-	bleveResult, err := runBleveBenchmark(ctx, filepath.Join(workDir, "bleve-index.bleve"), entries, cases, cfg)
-	if err != nil {
-		panic(err)
-	}
-	printEngineResult(bleveResult)
-
-	sqliteResult, err := runSQLiteBenchmark(ctx, filepath.Join(workDir, "sqlite-index.sqlite"), entries, cases, cfg)
+	sqliteResult, err := runSQLiteBenchmark(ctx, filepath.Join(workDir, "index.sqlite"), entries, cases, cfg)
 	if err != nil {
 		panic(err)
 	}
@@ -198,57 +191,6 @@ func benchmarkQueries() []queryCase {
 	}
 }
 
-func runBleveBenchmark(ctx context.Context, path string, entries []model.Entry, cases []queryCase, cfg benchConfig) (engineBenchResult, error) {
-	if err := os.RemoveAll(path); err != nil {
-		return engineBenchResult{}, err
-	}
-
-	start := time.Now()
-	st, err := store.Open(path)
-	if err != nil {
-		return engineBenchResult{}, err
-	}
-	scanID := time.Now().UnixMicro()
-	if err := st.BeginScan(ctx, scanID); err != nil {
-		_ = st.Close()
-		return engineBenchResult{}, err
-	}
-	for batchStart := 0; batchStart < len(entries); batchStart += cfg.batchSize {
-		batchEnd := minInt(batchStart+cfg.batchSize, len(entries))
-		if err := st.UpsertBatch(ctx, scanID, entries[batchStart:batchEnd]); err != nil {
-			_ = st.Close()
-			return engineBenchResult{}, err
-		}
-	}
-	if err := st.Close(); err != nil {
-		return engineBenchResult{}, err
-	}
-	indexTime := time.Since(start)
-
-	indexSize, err := pathSize(path)
-	if err != nil {
-		return engineBenchResult{}, err
-	}
-
-	readStore, err := store.OpenReadOnly(path)
-	if err != nil {
-		return engineBenchResult{}, err
-	}
-	defer readStore.Close()
-
-	queryResults, err := measureQueries(ctx, cases, cfg, readStore.Query)
-	if err != nil {
-		return engineBenchResult{}, err
-	}
-
-	return engineBenchResult{
-		name:      "Bleve",
-		indexTime: indexTime,
-		indexSize: indexSize,
-		queries:   queryResults,
-	}, nil
-}
-
 func runSQLiteBenchmark(ctx context.Context, path string, entries []model.Entry, cases []queryCase, cfg benchConfig) (engineBenchResult, error) {
 	if err := removeSQLiteFiles(path); err != nil {
 		return engineBenchResult{}, err
@@ -358,31 +300,6 @@ func percentile(sortedDurations []time.Duration, pct int) time.Duration {
 		index = len(sortedDurations)
 	}
 	return sortedDurations[index-1]
-}
-
-func pathSize(path string) (int64, error) {
-	var total int64
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil
-		}
-		return 0, err
-	}
-	err := filepath.WalkDir(path, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		total += info.Size()
-		return nil
-	})
-	return total, err
 }
 
 func sqlitePathSize(path string) (int64, error) {

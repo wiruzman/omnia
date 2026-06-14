@@ -90,14 +90,10 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 		}
 		resume, err := daemonstate.ReadResumeState(i.resumeAt)
 		if err == nil && resume.ScanID > 0 {
-			if isExactBleveNumericInt(resume.ScanID) {
-				scanID = resume.ScanID
-				walkOptions.ResumeRoot = resume.Root
-				walkOptions.ResumeAfterPath = resume.CurrentPath
-				i.logger.Printf("resuming reindex | scan_id=%d root=%s path=%s", scanID, resume.Root, resume.CurrentPath)
-			} else {
-				i.logger.Printf("ignoring imprecise resume scan id and restarting reindex | scan_id=%d root=%s path=%s", resume.ScanID, resume.Root, resume.CurrentPath)
-			}
+			scanID = resume.ScanID
+			walkOptions.ResumeRoot = resume.Root
+			walkOptions.ResumeAfterPath = resume.CurrentPath
+			i.logger.Printf("resuming reindex | scan_id=%d root=%s path=%s", scanID, resume.Root, resume.CurrentPath)
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 			i.logger.Printf("resume state read failed: %v", err)
 		}
@@ -257,11 +253,6 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 
 func newScanID() int64 {
 	return time.Now().UnixMicro()
-}
-
-func isExactBleveNumericInt(id int64) bool {
-	const maxExactInteger = int64(1 << 53)
-	return id >= -maxExactInteger && id <= maxExactInteger
 }
 
 func (i *Indexer) Stop() {

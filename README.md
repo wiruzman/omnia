@@ -16,7 +16,7 @@ Omnia is a keyboard-first terminal file search app for macOS. It keeps a local S
 ## Architecture at a glance
 
 - TUI: Go + tview/tcell.
-- Store: SQLite FTS5 trigram index. Bleve remains available as a legacy backend.
+- Store: SQLite FTS5 trigram index.
 - Scanner/indexer: filesystem walk + batched upserts.
 - Daemon: watches configured roots for incremental updates and runs reindex only when triggered manually or when bootstrapping an empty index.
 
@@ -105,7 +105,6 @@ Key fields:
 - include_paths: additional roots to index; your home directory is always added automatically
 - exclude_globs: path segments to skip
 - index_db_path: index database path (relative values are resolved under ~/.config/omnia-search)
-- store_backend: sqlite by default; bleve remains available for existing legacy indexes
 - daemon_dir: daemon status, trigger, and log directory (relative values are resolved under ~/.config/omnia-search)
 - sort_column: one of name, path, size, created, modified
 - sort_direction: ASC or DESC
@@ -117,7 +116,7 @@ Key fields:
 
 ## Benchmark
 
-Run the synthetic benchmark comparing Bleve with the SQLite FTS5 trigram store:
+Run the synthetic benchmark for the SQLite FTS5 trigram store:
 
 ```bash
 go run ./cmd/bench

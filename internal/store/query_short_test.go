@@ -10,61 +10,6 @@ import (
 	"omnia-search-tui/internal/sorter"
 )
 
-func TestBleveQueryShortPlainTermSkipsPathContains(t *testing.T) {
-	ctx := context.Background()
-	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-
-	assertShortPlainTermSkipsPathContains(t, ctx, st)
-}
-
-func TestBleveQueryMultiTermMatchesSeparatedNameTokens(t *testing.T) {
-	ctx := context.Background()
-	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-
-	assertMultiTermMatchesSeparatedNameTokens(t, ctx, st)
-}
-
-func TestBleveQueryLongPlainTermMatchesPathContains(t *testing.T) {
-	ctx := context.Background()
-	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-
-	assertLongPlainTermMatchesPathContains(t, ctx, st)
-}
-
-func TestBleveQueryPlainTermReturnsNameMatchesBeforePathContains(t *testing.T) {
-	ctx := context.Background()
-	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-
-	assertPlainTermReturnsNameMatchesBeforePathContains(t, ctx, st)
-}
-
-func TestBleveQueryPathTermSearchesPathContains(t *testing.T) {
-	ctx := context.Background()
-	st, err := Open(filepath.Join(t.TempDir(), "index.bleve"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-
-	assertPathTermSearchesPathContains(t, ctx, st)
-}
-
 func TestSQLiteQueryShortPlainTermSkipsPathContains(t *testing.T) {
 	ctx := context.Background()
 	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))

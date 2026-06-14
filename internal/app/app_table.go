@@ -35,7 +35,7 @@ func (a *App) renderHeader(cols []int) {
 
 func (a *App) renderTable() {
 	a.selectedCol = clampColumnIndex(a.selectedCol)
-	a.horizontalScrollCol = clampColumnIndex(a.horizontalScrollCol)
+	a.horizontalScrollCol = clampHorizontalScrollCol(a.horizontalScrollCol)
 	cols := a.visibleColumns()
 	rowOffset, _ := a.table.GetOffset()
 
@@ -81,12 +81,7 @@ func (a *App) moveSelectionHorizontal(delta int) {
 
 func (a *App) scrollColumnsHorizontal(delta int) {
 	nextCol := a.horizontalScrollCol + delta
-	if nextCol < 0 {
-		nextCol = 0
-	}
-	if nextCol >= len(tableHeaders) {
-		nextCol = len(tableHeaders) - 1
-	}
+	nextCol = clampHorizontalScrollCol(nextCol)
 	if nextCol == a.horizontalScrollCol {
 		return
 	}
@@ -134,6 +129,20 @@ func clampColumnIndex(col int) int {
 	}
 	if col >= len(tableHeaders) {
 		return len(tableHeaders) - 1
+	}
+	return col
+}
+
+func clampHorizontalScrollCol(col int) int {
+	if col < 0 {
+		return 0
+	}
+	maxCol := len(tableHeaders) - 2
+	if maxCol < 0 {
+		maxCol = 0
+	}
+	if col > maxCol {
+		return maxCol
 	}
 	return col
 }

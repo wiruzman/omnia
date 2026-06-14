@@ -852,6 +852,35 @@ func TestArrowRightDoesNotScrollWhenLastColumnAlreadyFits(t *testing.T) {
 	}
 }
 
+func TestEmptyResultsHeaderDoesNotExpandModifiedColumn(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.table.SetRect(0, 0, 80, 5)
+	a.applyResults(nil, 0)
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer screen.Fini()
+	screen.SetSize(80, 5)
+	a.table.Draw(screen)
+
+	var line strings.Builder
+	for x := 0; x < 80; x++ {
+		mainc, _, _, _ := screen.GetContent(x, 0)
+		if mainc == 0 {
+			mainc = ' '
+		}
+		line.WriteRune(mainc)
+	}
+	rendered := strings.TrimRight(line.String(), " ")
+	want := "Name Path Type Size Created Modified"
+	if rendered != want {
+		t.Fatalf("expected compact empty-results header %q, got %q", want, rendered)
+	}
+}
+
 func TestSearchInputArrowsFocusResultsAndScrollColumns(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)

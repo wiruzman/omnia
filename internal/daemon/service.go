@@ -3,11 +3,9 @@ package daemon
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
-	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -16,6 +14,7 @@ import (
 	"omnia-search-tui/internal/config"
 	"omnia-search-tui/internal/daemonstate"
 	"omnia-search-tui/internal/indexer"
+	"omnia-search-tui/internal/logging"
 	"omnia-search-tui/internal/progress"
 	"omnia-search-tui/internal/scanner"
 	"omnia-search-tui/internal/sorter"
@@ -28,7 +27,7 @@ type Service struct {
 	store   store.Backend
 	scanner *scanner.Scanner
 	indexer *indexer.Indexer
-	logger  *log.Logger
+	logger  logging.PrintfLogger
 }
 
 const watchEventMask = notify.Create | notify.Write | notify.Remove | notify.Rename
@@ -36,7 +35,7 @@ const watchEventMask = notify.Create | notify.Write | notify.Remove | notify.Ren
 const statusHeartbeatInterval = 15 * time.Second
 const incrementalFlushDebounce = 900 * time.Millisecond
 
-func New(cfg config.Config, logger *log.Logger) (*Service, error) {
+func New(cfg config.Config, logger logging.PrintfLogger) (*Service, error) {
 	st, err := store.OpenSQLite(cfg.IndexDBPath)
 	if err != nil {
 		return nil, err
@@ -468,16 +467,15 @@ func RunMain(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	logPath := filepath.Join(cfg.DaemonDir, "daemon.log")
-	if err := os.MkdirAll(cfg.DaemonDir, 0o755); err != nil {
+	daemonLog, err := logging.OpenDaemon(cfg)
+	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open daemon log: %w", err)
-	}
-	defer f.Close()
-	logger := log.New(io.MultiWriter(os.Stdout, f), "", log.LstdFlags)
+	logger := daemonLog.Logger
+	defer func() { _ = daemonLog.Close() }()
+	defer logPanic(logger)
+
+	logger.Printf("daemon logging initialized | path=%s level=%s max_bytes=%d backups=%d stdout=%t", daemonLog.Path, cfg.DaemonLogLevel, cfg.DaemonLogMaxBytes, cfg.DaemonLogBackups, daemonLog.ToStdout)
 	if err := lowerDaemonPriority(); err != nil {
 		logger.Printf("lower daemon priority failed: %v", err)
 	} else {
@@ -486,10 +484,23 @@ func RunMain(ctx context.Context) error {
 
 	svc, err := New(cfg, logger)
 	if err != nil {
+		logger.Printf("daemon initialization failed: %v", err)
 		return err
 	}
 	defer func() { _ = svc.Close() }()
-	return svc.Run(ctx)
+	if err := svc.Run(ctx); err != nil {
+		logger.Printf("daemon stopped with error: %v", err)
+		return err
+	}
+	logger.Printf("daemon stopped")
+	return nil
+}
+
+func logPanic(logger logging.PrintfLogger) {
+	if r := recover(); r != nil {
+		logger.Printf("daemon panic: %v | stack=%s", r, strings.TrimSpace(string(debug.Stack())))
+		panic(r)
+	}
 }
 
 func trimMiddle(s string, max int) string {

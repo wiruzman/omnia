@@ -1,12 +1,15 @@
 package logging
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
-	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"omnia-search-tui/internal/config"
 )
@@ -23,7 +26,7 @@ func TestOpenDaemonWritesJSONWithClassifiedLevel(t *testing.T) {
 		t.Fatalf("open daemon logger: %v", err)
 	}
 
-	logger.Logger.Printf("watch setup failed for %s: %v", "/tmp", errors.New("boom"))
+	logger.Logger.Printf("incremental flush | total=%d upserts=%d deletes=%d skipped=%d failures=%d", 2, 1, 1, 0, 0)
 	if err := logger.Close(); err != nil {
 		t.Fatalf("close daemon logger: %v", err)
 	}
@@ -41,17 +44,72 @@ func TestOpenDaemonWritesJSONWithClassifiedLevel(t *testing.T) {
 	if err := json.Unmarshal([]byte(line), &record); err != nil {
 		t.Fatalf("parse json log: %v\n%s", err, line)
 	}
-	if record["level"] != "ERROR" {
-		t.Fatalf("expected ERROR level, got %v", record["level"])
+	if record["level"] != "INFO" {
+		t.Fatalf("expected INFO level, got %v", record["level"])
 	}
-	if record["msg"] != "watch setup failed for /tmp: boom" {
+	if record["msg"] != "incremental flush" {
 		t.Fatalf("unexpected message: %v", record["msg"])
+	}
+	if record["total"] != float64(2) || record["upserts"] != float64(1) || record["deletes"] != float64(1) || record["skipped"] != float64(0) || record["failures"] != float64(0) {
+		t.Fatalf("expected parsed numeric flush fields, got %+v", record)
 	}
 	if record["component"] != "daemon" {
 		t.Fatalf("expected daemon component, got %v", record["component"])
 	}
 	if _, ok := record["pid"].(float64); !ok {
 		t.Fatalf("expected numeric pid, got %T", record["pid"])
+	}
+}
+
+func TestConsoleHandlerWritesHumanReadableLine(t *testing.T) {
+	var buf bytes.Buffer
+	handler := newConsoleHandler(&buf, slog.LevelInfo).WithAttrs([]slog.Attr{
+		slog.String("component", "daemon"),
+		slog.Int("pid", 123),
+	})
+
+	record := slog.NewRecord(time.Date(2026, 6, 14, 19, 49, 48, 0, time.Local), slog.LevelInfo, "incremental flush", 0)
+	record.AddAttrs(
+		slog.Int("total", 2),
+		slog.Int("upserts", 1),
+		slog.Int("deletes", 1),
+		slog.Int("skipped", 0),
+		slog.Int("failures", 0),
+	)
+	if err := handler.Handle(context.Background(), record); err != nil {
+		t.Fatalf("write console log: %v", err)
+	}
+
+	want := "2026/06/14 19:49:48 incremental flush | total=2 upserts=1 deletes=1 skipped=0 failures=0\n"
+	if buf.String() != want {
+		t.Fatalf("unexpected console output:\nwant %q\n got %q", want, buf.String())
+	}
+}
+
+func TestParseLogLineExtractsFields(t *testing.T) {
+	msg, attrs := parseLogLine("daemon logging initialized | path=/tmp/daemon.log level=info max_bytes=10485760 backups=5 stdout=false")
+
+	if msg != "daemon logging initialized" {
+		t.Fatalf("unexpected message: %q", msg)
+	}
+	if len(attrs) != 5 {
+		t.Fatalf("expected 5 attrs, got %d: %+v", len(attrs), attrs)
+	}
+	if attrs[0].Key != "path" || attrs[0].Value.String() != "/tmp/daemon.log" {
+		t.Fatalf("unexpected path attr: %+v", attrs[0])
+	}
+	if attrs[2].Key != "max_bytes" || attrs[2].Value.Int64() != 10485760 {
+		t.Fatalf("unexpected max_bytes attr: %+v", attrs[2])
+	}
+	if attrs[4].Key != "stdout" || attrs[4].Value.Bool() {
+		t.Fatalf("unexpected stdout attr: %+v", attrs[4])
+	}
+}
+
+func TestClassifyLevelKeepsFailureCountersAtInfo(t *testing.T) {
+	got := classifyLevel("incremental flush | total=2 upserts=1 deletes=1 skipped=0 failures=0")
+	if got != slog.LevelInfo {
+		t.Fatalf("expected failures counter to stay info, got %v", got)
 	}
 }
 

@@ -52,6 +52,7 @@ type App struct {
 	searchCancel                context.CancelFunc
 	searchRunID                 uint64
 	searchState                 atomic.Uint32
+	refreshReason               atomic.Uint32
 	emptyQueryMu                sync.RWMutex
 	emptyQueryResults           map[sorter.SortSpec]store.QueryResult
 	deleteState                 atomic.Uint32

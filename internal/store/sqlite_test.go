@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -172,4 +173,100 @@ func TestSQLiteStoreUpsertRefreshesFTSAndDeletePathPrefix(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("expected delete prefix to remove entry, got %d", count)
 	}
+}
+
+func TestSQLiteEmptyQueryReturnsVisibleTotalWithoutFullCount(t *testing.T) {
+	ctx := context.Background()
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Now()
+	entries := []model.Entry{
+		{Path: "/tmp/a.txt", Name: "a.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, Size: 1, CreatedAt: now, ModifiedAt: now},
+		{Path: "/tmp/b.txt", Name: "b.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, Size: 2, CreatedAt: now, ModifiedAt: now},
+		{Path: "/tmp/c.txt", Name: "c.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, Size: 3, CreatedAt: now, ModifiedAt: now},
+	}
+	if err := st.UpsertBatch(ctx, now.UnixMicro(), entries); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := st.Query(ctx, "", sorter.SortSpec{Column: sorter.SortName, Direction: sorter.Asc}, 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Entries) != 2 {
+		t.Fatalf("expected limited empty-query entries, got %d", len(res.Entries))
+	}
+	if res.Total != len(res.Entries) {
+		t.Fatalf("expected empty-query total to report visible rows without full count, got total=%d visible=%d", res.Total, len(res.Entries))
+	}
+
+	preview, err := st.Preview(ctx, sorter.SortSpec{Column: sorter.SortName, Direction: sorter.Asc}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Total != len(preview.Entries) {
+		t.Fatalf("expected preview total to report visible rows without full count, got total=%d visible=%d", preview.Total, len(preview.Entries))
+	}
+}
+
+func TestSQLiteEmptyQuerySortsUseIndexesWithoutTempOrderBy(t *testing.T) {
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	cases := []sorter.SortSpec{
+		{Column: sorter.SortName, Direction: sorter.Asc},
+		{Column: sorter.SortName, Direction: sorter.Desc},
+		{Column: sorter.SortPath, Direction: sorter.Asc},
+		{Column: sorter.SortPath, Direction: sorter.Desc},
+		{Column: sorter.SortSize, Direction: sorter.Asc},
+		{Column: sorter.SortSize, Direction: sorter.Desc},
+		{Column: sorter.SortCreated, Direction: sorter.Asc},
+		{Column: sorter.SortCreated, Direction: sorter.Desc},
+		{Column: sorter.SortModified, Direction: sorter.Asc},
+		{Column: sorter.SortModified, Direction: sorter.Desc},
+	}
+
+	for _, spec := range cases {
+		sql := `EXPLAIN QUERY PLAN
+			SELECT e.path, e.name, e.parent_path, e.root_path, e.type, e.size, e.created_at, e.modified_at
+			FROM entries e
+			ORDER BY ` + sqliteOrderBy(spec) + `
+			LIMIT 100 OFFSET 0;`
+		details := sqliteQueryPlanDetails(t, st, sql)
+		for _, detail := range details {
+			if strings.Contains(detail, "USE TEMP B-TREE FOR ORDER BY") {
+				t.Fatalf("expected indexed sort for %+v, plan used temp order by: %s", spec, strings.Join(details, "\n"))
+			}
+		}
+	}
+}
+
+func sqliteQueryPlanDetails(t *testing.T, st *SQLiteStore, sql string) []string {
+	t.Helper()
+
+	stmt, err := st.db.Prepare(sql)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stmt.Finalize()
+
+	var details []string
+	for {
+		row, err := stmt.Step()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !row {
+			break
+		}
+		details = append(details, stmt.ColumnText(3))
+	}
+	return details
 }

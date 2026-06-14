@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -198,16 +197,10 @@ func (a *App) captureTableKeys(event *tcell.EventKey) *tcell.EventKey {
 			a.requestReindexControl(true)
 			return nil
 		case 's':
-			a.sortSpec = a.sortSpec.NextColumn()
-			a.selectedCol = sortColumnIndex(a.sortSpec.Column)
-			a.persistSortSpec()
-			a.refreshData(context.Background())
+			a.applySortSpec(a.sortSpec.NextColumn())
 			return nil
 		case 'S':
-			a.sortSpec = a.sortSpec.ToggleDirection()
-			a.selectedCol = sortColumnIndex(a.sortSpec.Column)
-			a.persistSortSpec()
-			a.refreshData(context.Background())
+			a.applySortSpec(a.sortSpec.ToggleDirection())
 			return nil
 		case 'f':
 			a.revealSelected()

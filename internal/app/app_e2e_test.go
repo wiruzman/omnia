@@ -420,6 +420,68 @@ func TestE2EStartupPreviewDoesNotBlockFirstSearch(t *testing.T) {
 	})
 }
 
+func TestE2ESortChangeDoesNotBlockUIWhileResultsRefresh(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+
+	now := time.Now()
+	preview := store.QueryResult{
+		Entries: []model.Entry{{
+			Path:       "/fixture/current.txt",
+			Name:       "current.txt",
+			ParentPath: "/fixture",
+			RootPath:   "/fixture",
+			Type:       model.TypeFile,
+			CreatedAt:  now,
+			ModifiedAt: now,
+		}},
+		Total: 1,
+	}
+	cacheLimit := startupcache.EffectiveLimit(a.cfg.MaxResults)
+	if err := startupcache.Save(startupcache.Path(a.cfg), a.sortSpec, cacheLimit, preview); err != nil {
+		t.Fatalf("seed startup cache: %v", err)
+	}
+
+	backend := &blockingStartupBackend{
+		Backend:      a.store,
+		queryStarted: make(chan struct{}),
+		releaseQuery: make(chan struct{}),
+	}
+	a.store = backend
+
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() {
+		close(backend.releaseQuery)
+	})
+
+	screen := startSimulatedTUI(t, a, 120, 25)
+	waitForScreenText(t, screen, "current.txt", 2*time.Second)
+
+	a.tui.QueueUpdate(func() {
+		a.tui.SetFocus(a.table)
+	})
+	if !screen.InjectKeyBytes([]byte("s")) {
+		t.Fatal("failed to inject sort key")
+	}
+
+	select {
+	case <-backend.queryStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected sort change to start a background refresh")
+	}
+	waitForScreenText(t, screen, "activity: sorting", 500*time.Millisecond)
+	waitForScreenText(t, screen, "sort: path ASC", 500*time.Millisecond)
+
+	if !screen.InjectKeyBytes([]byte(":x")) {
+		t.Fatal("failed to inject input after sort key")
+	}
+	waitForScreenText(t, screen, "query: x", 500*time.Millisecond)
+
+	releaseOnce.Do(func() {
+		close(backend.releaseQuery)
+	})
+}
+
 func TestE2ESimulatedTerminalTUISearchRendersAndOpensResult(t *testing.T) {
 	root := createSearchFixture(t)
 	a, _ := newE2EApp(t, root, 64)

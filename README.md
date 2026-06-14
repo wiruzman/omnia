@@ -68,7 +68,7 @@ For non-empty queries, Omnia prioritizes cheaper lookups first to keep typing re
 - Slash/path-like terms: path prefix or path contains, skipping filename scans.
 - Multi-word terms: exact phrase contains first, then all-term matching so separated words can still match.
 
-If a query is slow or times out, the app falls back to bounded in-memory filtering so the UI stays responsive.
+If a live query is slow or times out, the app shows no results for that query instead of keeping stale rows or running extra fallback scans.
 
 ## Daemon behavior
 

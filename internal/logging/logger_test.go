@@ -80,7 +80,23 @@ func TestConsoleHandlerWritesHumanReadableLine(t *testing.T) {
 		t.Fatalf("write console log: %v", err)
 	}
 
-	want := "2026/06/14 19:49:48 incremental flush | total=2 upserts=1 deletes=1 skipped=0 failures=0\n"
+	want := "2026/06/14 19:49:48 INFO  incremental flush | total=2 upserts=1 deletes=1 skipped=0 failures=0\n"
+	if buf.String() != want {
+		t.Fatalf("unexpected console output:\nwant %q\n got %q", want, buf.String())
+	}
+}
+
+func TestConsoleHandlerWritesErrorLevel(t *testing.T) {
+	var buf bytes.Buffer
+	handler := newConsoleHandler(&buf, slog.LevelInfo)
+
+	record := slog.NewRecord(time.Date(2026, 6, 14, 19, 50, 10, 0, time.Local), slog.LevelError, "watch setup failed", 0)
+	record.AddAttrs(slog.String("root", "/tmp"), slog.String("err", "boom"))
+	if err := handler.Handle(context.Background(), record); err != nil {
+		t.Fatalf("write console log: %v", err)
+	}
+
+	want := "2026/06/14 19:50:10 ERROR watch setup failed | root=/tmp err=boom\n"
 	if buf.String() != want {
 		t.Fatalf("unexpected console output:\nwant %q\n got %q", want, buf.String())
 	}

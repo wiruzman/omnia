@@ -134,6 +134,8 @@ func (h *consoleHandler) Handle(_ context.Context, record slog.Record) error {
 	var b strings.Builder
 	b.WriteString(record.Time.Local().Format("2006/01/02 15:04:05"))
 	b.WriteByte(' ')
+	b.WriteString(consoleLevel(record.Level))
+	b.WriteByte(' ')
 	b.WriteString(record.Message)
 
 	firstAttr := true
@@ -177,6 +179,19 @@ func (h *consoleHandler) WithGroup(_ string) slog.Handler {
 
 func shouldHideConsoleAttr(attr slog.Attr) bool {
 	return attr.Key == "" || attr.Key == "component" || attr.Key == "pid"
+}
+
+func consoleLevel(level slog.Level) string {
+	switch {
+	case level >= slog.LevelError:
+		return "ERROR"
+	case level >= slog.LevelWarn:
+		return "WARN "
+	case level <= slog.LevelDebug:
+		return "DEBUG"
+	default:
+		return "INFO "
+	}
 }
 
 func consoleValue(v slog.Value) string {

@@ -94,6 +94,13 @@ func (a *App) buildUI() {
 	a.table.SetBackgroundColor(tcell.ColorDefault)
 	a.table.SetSelectedStyle(tcell.StyleDefault.Reverse(true))
 	a.table.SetFixed(1, 0)
+	a.table.SetDrawFunc(func(_ tcell.Screen, _, _, _, _ int) (int, int, int, int) {
+		innerX, innerY, innerWidth, innerHeight := a.table.GetInnerRect()
+		if a.tableRenderWidth != innerWidth {
+			a.renderTable()
+		}
+		return innerX, innerY, innerWidth, innerHeight
+	})
 	a.table.SetSelectedFunc(func(row, _ int) {
 		if row <= 0 || row-1 >= len(a.entries) {
 			return

@@ -43,6 +43,9 @@ func (a *App) renderTable() {
 	a.selectedCol = clampColumnIndex(a.selectedCol)
 	a.horizontalScrollCol = a.clampHorizontalScrollCol(a.horizontalScrollCol)
 	layouts := a.visibleColumnLayouts()
+	renderWidths := a.columnRenderWidths(layouts)
+	_, _, renderWidth, _ := a.table.GetInnerRect()
+	a.tableRenderWidth = renderWidth
 	rowOffset, _ := a.table.GetOffset()
 
 	a.table.Clear()
@@ -52,7 +55,7 @@ func (a *App) renderTable() {
 		row := i + 1
 		for p, layout := range layouts {
 			c := layout.col
-			text := a.columnText(e, c)
+			text := a.columnText(e, c, renderWidths[p])
 			cell := tview.NewTableCell(text).
 				SetBackgroundColor(tcell.ColorDefault).
 				SetExpansion(layout.expansion).
@@ -104,7 +107,7 @@ func (a *App) visibleColumnLayouts() []tableColumnLayout {
 	if a.horizontalScrollCol > 0 && a.horizontalScrollCol == a.maxHorizontalScrollCol() {
 		return a.rightmostColumnLayouts(cols)
 	}
-	return makeTableColumnLayouts(cols, len(cols)-1)
+	return makeTableColumnLayouts(cols, expandingColumnPosition(cols))
 }
 
 func (a *App) rightmostColumnLayouts(cols []int) []tableColumnLayout {
@@ -224,13 +227,59 @@ func (a *App) tableColumnWidth(col int) int {
 	col = clampColumnIndex(col)
 	width := tview.TaggedStringWidth(tableHeaders[col])
 	for _, entry := range a.entries {
-		cellWidth := tview.TaggedStringWidth(a.columnText(entry, col))
+		cellWidth := tview.TaggedStringWidth(a.columnText(entry, col, tableColumnMaxWidths[col]))
 		if maxWidth := tableColumnMaxWidths[col]; maxWidth > 0 && cellWidth > maxWidth {
 			cellWidth = maxWidth
 		}
 		if cellWidth > width {
 			width = cellWidth
 		}
+	}
+	return width
+}
+
+func (a *App) columnRenderWidths(layouts []tableColumnLayout) []int {
+	widths := make([]int, len(layouts))
+	_, _, netWidth, _ := a.table.GetInnerRect()
+	if netWidth <= 0 {
+		for p, layout := range layouts {
+			widths[p] = a.tableColumnLayoutWidth(layout)
+		}
+		return widths
+	}
+
+	var tableWidth, expansionTotal int
+	for p, layout := range layouts {
+		baseWidth := a.tableColumnLayoutWidth(layout)
+		if tableWidth >= netWidth {
+			baseWidth = 0
+		} else if tableWidth+baseWidth > netWidth {
+			baseWidth = netWidth - tableWidth
+		}
+		widths[p] = baseWidth
+		tableWidth += baseWidth + 1
+		expansionTotal += layout.expansion
+	}
+
+	if tableWidth < netWidth && expansionTotal > 0 {
+		toDistribute := netWidth - tableWidth
+		for p, layout := range layouts {
+			if expansionTotal <= 0 {
+				break
+			}
+			extraWidth := toDistribute * layout.expansion / expansionTotal
+			widths[p] += extraWidth
+			toDistribute -= extraWidth
+			expansionTotal -= layout.expansion
+		}
+	}
+	return widths
+}
+
+func (a *App) tableColumnLayoutWidth(layout tableColumnLayout) int {
+	width := a.tableColumnWidth(layout.col)
+	if layout.maxWidth > 0 && width > layout.maxWidth {
+		return layout.maxWidth
 	}
 	return width
 }
@@ -249,6 +298,21 @@ func makeTableColumnLayouts(cols []int, expandingPosition int) []tableColumnLayo
 		}
 	}
 	return layouts
+}
+
+func expandingColumnPosition(cols []int) int {
+	pathCol := sortColumnIndex(sorter.SortPath)
+	for p, col := range cols {
+		if col == pathCol {
+			return p
+		}
+	}
+	for p, col := range cols {
+		if tableColumnAlign(col) != tview.AlignRight {
+			return p
+		}
+	}
+	return len(cols) - 1
 }
 
 func tableColumnAlign(col int) int {
@@ -275,12 +339,12 @@ func sortColumnIndex(col sorter.Column) int {
 	}
 }
 
-func (a *App) columnText(e model.Entry, col int) string {
+func (a *App) columnText(e model.Entry, col, width int) string {
 	switch col {
 	case 0:
-		return trimMiddle(e.Name, tableColumnMaxWidths[0])
+		return trimMiddle(e.Name, width)
 	case 1:
-		return trimMiddle(e.Path, tableColumnMaxWidths[1])
+		return trimMiddle(e.Path, width)
 	case 2:
 		return string(e.Type)
 	case 3:
@@ -308,9 +372,16 @@ func formatSize(size int64) string {
 }
 
 func trimMiddle(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
 	if len(s) <= max {
 		return s
 	}
+	if max <= 3 {
+		return s[:max]
+	}
 	half := (max - 3) / 2
-	return s[:half] + "..." + s[len(s)-half:]
+	tail := max - 3 - half
+	return s[:half] + "..." + s[len(s)-tail:]
 }

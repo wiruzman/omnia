@@ -31,7 +31,9 @@ type App struct {
 	indexer       *indexer.Indexer
 	tui           *tview.Application
 	layout        *tview.Flex
+	searchBox     *tview.Flex
 	input         *tview.InputField
+	shortcutHelp  *tview.TextView
 	table         *tview.Table
 	status        *tview.TextView
 	details       *tview.TextView
@@ -43,6 +45,7 @@ type App struct {
 	selectedCol                 int
 	horizontalScrollCol         int
 	query                       string
+	shortcutHelpVisible         bool
 	sortSpec                    sorter.SortSpec
 	resetSelectionOnNextResults bool
 	total                       int

@@ -23,6 +23,7 @@ import (
 	"omnia-search-tui/internal/sorter"
 	"omnia-search-tui/internal/startupcache"
 	"omnia-search-tui/internal/store"
+	tuihelp "omnia-search-tui/internal/tui"
 )
 
 type mockSystemAdapter struct {
@@ -1158,6 +1159,84 @@ func TestShiftColonFocusesSearchInput(t *testing.T) {
 	}
 	if a.tui.GetFocus() != a.input {
 		t.Fatalf("expected search input to receive focus")
+	}
+}
+
+func TestShiftQuestionTogglesShortcutHelpAboveSearchInput(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer screen.Fini()
+	screen.SetSize(120, 30)
+	a.layout.SetRect(0, 0, 120, 30)
+	a.layout.Draw(screen)
+
+	_, _, _, shortcutHelpRenderedHeight := a.shortcutHelp.GetRect()
+	_, searchBoxY, _, searchBoxHeight := a.searchBox.GetRect()
+	_, inputY, _, _ := a.input.GetRect()
+	if a.shortcutHelpVisible {
+		t.Fatal("expected shortcut help to start hidden")
+	}
+	if shortcutHelpRenderedHeight != 0 {
+		t.Fatalf("expected hidden shortcut help height 0, got %d", shortcutHelpRenderedHeight)
+	}
+	if searchBoxHeight != searchBoxCollapsedHeight {
+		t.Fatalf("expected collapsed search box height %d, got %d", searchBoxCollapsedHeight, searchBoxHeight)
+	}
+	if inputY != searchBoxY+1 {
+		t.Fatalf("expected search input at top of collapsed search box, got y=%d searchBoxY=%d", inputY, searchBoxY)
+	}
+
+	capture := a.tui.GetInputCapture()
+	if capture == nil {
+		t.Fatal("expected global input capture to be installed")
+	}
+	if ret := capture(tcell.NewEventKey(tcell.KeyRune, '?', tcell.ModShift)); ret != nil {
+		t.Fatalf("expected Shift+? to be handled")
+	}
+	a.layout.Draw(screen)
+
+	_, shortcutHelpY, _, shortcutHelpRenderedHeight := a.shortcutHelp.GetRect()
+	_, searchBoxY, _, searchBoxHeight = a.searchBox.GetRect()
+	_, inputY, _, _ = a.input.GetRect()
+	helpHeight := shortcutHelpHeight(tuihelp.ShortcutHelp)
+	if !a.shortcutHelpVisible {
+		t.Fatal("expected shortcut help to be visible")
+	}
+	if shortcutHelpRenderedHeight != helpHeight {
+		t.Fatalf("expected shortcut help height %d, got %d", helpHeight, shortcutHelpRenderedHeight)
+	}
+	if searchBoxY != shortcutHelpY+helpHeight {
+		t.Fatalf("expected search box below shortcut help, got searchBoxY=%d shortcutHelpY=%d helpHeight=%d", searchBoxY, shortcutHelpY, helpHeight)
+	}
+	if searchBoxHeight != searchBoxCollapsedHeight {
+		t.Fatalf("expected search box to stay height %d, got %d", searchBoxCollapsedHeight, searchBoxHeight)
+	}
+	if inputY != searchBoxY+1 {
+		t.Fatalf("expected search input to stay inside compact search box, got y=%d searchBoxY=%d", inputY, searchBoxY)
+	}
+	if got := a.shortcutHelp.GetText(true); !strings.Contains(got, "Shift+?: show/hide shortcuts") || !strings.Contains(got, "s: cycle sort column") {
+		t.Fatalf("expected shortcut help text to include two-column shortcuts, got %q", got)
+	}
+
+	if ret := capture(tcell.NewEventKey(tcell.KeyRune, '?', tcell.ModShift)); ret != nil {
+		t.Fatalf("expected second Shift+? to be handled")
+	}
+	a.layout.Draw(screen)
+	_, _, _, shortcutHelpRenderedHeight = a.shortcutHelp.GetRect()
+	_, _, _, searchBoxHeight = a.searchBox.GetRect()
+	if a.shortcutHelpVisible {
+		t.Fatal("expected shortcut help to be hidden after second toggle")
+	}
+	if shortcutHelpRenderedHeight != 0 {
+		t.Fatalf("expected shortcut help height 0 after second toggle, got %d", shortcutHelpRenderedHeight)
+	}
+	if searchBoxHeight != searchBoxCollapsedHeight {
+		t.Fatalf("expected collapsed search box height %d after second toggle, got %d", searchBoxCollapsedHeight, searchBoxHeight)
 	}
 }
 

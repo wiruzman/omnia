@@ -1,6 +1,7 @@
 package tui
 
 var ShortcutHelp = []string{
+	"Shift+?: show/hide shortcuts",
 	"Shift+:: focus search",
 	"Esc: clear search or close details",
 	"Arrow Up/Down or j/k: move rows",

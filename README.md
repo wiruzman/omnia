@@ -79,7 +79,8 @@ If a live query is slow or times out, the app shows no results for that query in
 
 ## Keyboard shortcuts
 
-- /: focus search
+- Shift+?: show/hide shortcuts
+- Shift+:: focus search
 - Esc: clear search or close details
 - Arrow Up/Down or j/k: move rows
 - Arrow Left/Right: scroll columns

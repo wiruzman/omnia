@@ -57,6 +57,7 @@ Logs and daemon state are stored under:
 
 - ~/.config/omnia-search/omnia.log
 - ~/.config/omnia-search/daemon/
+- ~/.config/omnia-search/daemon/daemon.log
 
 ## Search behavior
 
@@ -76,6 +77,7 @@ If a live query is slow or times out, the app shows no results for that query in
 - The TUI reads daemon status and triggers reindex requests through a trigger file.
 - The daemon applies incremental updates from filesystem events.
 - The daemon starts a full reindex automatically when it detects an empty index.
+- The daemon writes JSON-line logs with severity, pid, and component fields, and rotates them by size for service-mode troubleshooting.
 
 ## Keyboard shortcuts
 
@@ -106,6 +108,10 @@ Key fields:
 - exclude_globs: path segments to skip
 - index_db_path: index database path (relative values are resolved under ~/.config/omnia-search)
 - daemon_dir: daemon status, trigger, and log directory (relative values are resolved under ~/.config/omnia-search)
+- daemon_log_file: daemon log file path; relative values are resolved under daemon_dir
+- daemon_log_level: minimum daemon log level: debug, info, warn, or error
+- daemon_log_max_bytes: rotate daemon logs after this many bytes
+- daemon_log_backups: number of rotated daemon log files to retain
 - sort_column: one of name, path, size, created, modified
 - sort_direction: ASC or DESC
 - max_results: max rows shown per query

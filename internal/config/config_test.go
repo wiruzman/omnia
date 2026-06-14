@@ -27,6 +27,18 @@ func TestDefaultScanThrottle(t *testing.T) {
 	if cfg.ScanThrottleMs != 5 {
 		t.Fatalf("expected default scan_throttle_ms 5, got %d", cfg.ScanThrottleMs)
 	}
+	if cfg.DaemonLogFile != "daemon.log" {
+		t.Fatalf("expected default daemon_log_file daemon.log, got %q", cfg.DaemonLogFile)
+	}
+	if cfg.DaemonLogLevel != "info" {
+		t.Fatalf("expected default daemon_log_level info, got %q", cfg.DaemonLogLevel)
+	}
+	if cfg.DaemonLogMaxBytes != 10*1024*1024 {
+		t.Fatalf("expected default daemon_log_max_bytes 10MiB, got %d", cfg.DaemonLogMaxBytes)
+	}
+	if cfg.DaemonLogBackups != 5 {
+		t.Fatalf("expected default daemon_log_backups 5, got %d", cfg.DaemonLogBackups)
+	}
 }
 
 func TestNormalizeAllowsDisablingScanThrottle(t *testing.T) {
@@ -90,8 +102,29 @@ func TestLoadResolvesRelativeRuntimePaths(t *testing.T) {
 	if cfg.DaemonDir != filepath.Join(configBase, "daemon") {
 		t.Fatalf("unexpected daemon_dir: %q", cfg.DaemonDir)
 	}
+	if cfg.DaemonLogFile != filepath.Join(configBase, "daemon", "daemon.log") {
+		t.Fatalf("unexpected daemon_log_file: %q", cfg.DaemonLogFile)
+	}
 	if len(cfg.IncludePaths) == 0 || cfg.IncludePaths[0] != filepath.Clean(home) {
 		t.Fatalf("expected home include path to be injected, got %v", cfg.IncludePaths)
+	}
+}
+
+func TestNormalizeDaemonLogOptions(t *testing.T) {
+	cfg := normalize(Config{
+		DaemonLogLevel:    "warning",
+		DaemonLogMaxBytes: -1,
+		DaemonLogBackups:  -1,
+	})
+
+	if cfg.DaemonLogLevel != "warn" {
+		t.Fatalf("expected warning to normalize to warn, got %q", cfg.DaemonLogLevel)
+	}
+	if cfg.DaemonLogMaxBytes != 10*1024*1024 {
+		t.Fatalf("expected daemon_log_max_bytes default, got %d", cfg.DaemonLogMaxBytes)
+	}
+	if cfg.DaemonLogBackups != 5 {
+		t.Fatalf("expected daemon_log_backups default, got %d", cfg.DaemonLogBackups)
 	}
 }
 

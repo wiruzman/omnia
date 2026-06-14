@@ -278,7 +278,7 @@ func shouldRefreshIndexedTotal(indexingRunning bool, needsRecount bool, lastCoun
 	if now.Sub(lastCountAt) < 5*time.Second {
 		return false
 	}
-	return indexingRunning || needsRecount
+	return !indexingRunning && needsRecount
 }
 
 func resetTimer(timer *time.Timer, delay time.Duration) {

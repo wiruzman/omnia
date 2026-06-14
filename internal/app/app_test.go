@@ -1421,6 +1421,29 @@ func TestSearchStateTextIdleWhenQueryIsEmpty(t *testing.T) {
 	}
 }
 
+func TestActivityTextShowsEmptySortRefreshProgress(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+
+	a.query = ""
+	a.refreshReason.Store(refreshReasonSort)
+
+	a.setSearchState(searchStatePending)
+	if got := a.activityText(); got != "sorting queued" {
+		t.Fatalf("expected queued sort activity, got %q", got)
+	}
+
+	a.setSearchState(searchStateRunning)
+	if got := a.activityText(); got != "sorting" {
+		t.Fatalf("expected running sort activity, got %q", got)
+	}
+
+	a.setSearchState(searchStateDone)
+	if got := a.activityText(); got != "sort applied" {
+		t.Fatalf("expected completed sort activity, got %q", got)
+	}
+}
+
 func TestUpdateStatusUsesDaemonIndexedTotalWhenQueryEmpty(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)

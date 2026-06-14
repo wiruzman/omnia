@@ -21,6 +21,12 @@ const (
 )
 
 const (
+	refreshReasonRefresh uint32 = iota
+	refreshReasonSearch
+	refreshReasonSort
+)
+
+const (
 	liveSearchLimitCap = 1200
 	liveSearchTimeout  = 900 * time.Millisecond
 )
@@ -45,6 +51,50 @@ func (a *App) searchStateText() string {
 	}
 }
 
+func (a *App) activityText() string {
+	state := a.searchState.Load()
+	reason := a.refreshReason.Load()
+
+	switch state {
+	case searchStatePending:
+		switch reason {
+		case refreshReasonSort:
+			return "sorting queued"
+		case refreshReasonSearch:
+			return "search queued"
+		default:
+			return "refresh queued"
+		}
+	case searchStateRunning:
+		switch reason {
+		case refreshReasonSort:
+			return "sorting"
+		case refreshReasonSearch:
+			return "searching"
+		default:
+			return "refreshing"
+		}
+	case searchStateDone:
+		switch reason {
+		case refreshReasonSort:
+			return "sort applied"
+		case refreshReasonSearch:
+			return "search finished"
+		default:
+			return "idle"
+		}
+	default:
+		return "idle"
+	}
+}
+
+func refreshReasonForQuery(query string) uint32 {
+	if strings.TrimSpace(query) != "" {
+		return refreshReasonSearch
+	}
+	return refreshReasonRefresh
+}
+
 func (a *App) debounceRefresh() {
 	a.searchMu.Lock()
 	defer a.searchMu.Unlock()
@@ -59,6 +109,7 @@ func (a *App) debounceRefresh() {
 	refreshID := atomic.AddUint64(&a.refreshID, 1)
 	query := a.query
 	sortSpec := a.sortSpec
+	a.refreshReason.Store(refreshReasonForQuery(query))
 	a.searchDue = time.AfterFunc(time.Duration(a.cfg.DebounceMs)*time.Millisecond, func() {
 		go a.refreshDataAsync(context.Background(), refreshID, query, sortSpec)
 	})
@@ -76,6 +127,7 @@ func (a *App) invalidatePendingRefreshes() {
 		a.searchCancel = nil
 	}
 	a.setSearchState(searchStateIdle)
+	a.refreshReason.Store(refreshReasonRefresh)
 	atomic.AddUint64(&a.refreshID, 1)
 }
 
@@ -112,9 +164,32 @@ func (a *App) newSearchContext(parent context.Context) (context.Context, func())
 }
 
 func (a *App) requestRefreshAsync(query string, sortSpec sorter.SortSpec) {
+	a.requestRefreshAsyncWithReason(query, sortSpec, refreshReasonForQuery(query))
+}
+
+func (a *App) requestRefreshAsyncWithReason(query string, sortSpec sorter.SortSpec, reason uint32) {
+	a.refreshReason.Store(reason)
 	a.setSearchState(searchStatePending)
 	refreshID := atomic.AddUint64(&a.refreshID, 1)
 	go a.refreshDataAsync(context.Background(), refreshID, query, sortSpec)
+}
+
+func (a *App) applySortSpec(sortSpec sorter.SortSpec) {
+	a.sortSpec = sortSpec
+	a.selectedCol = sortColumnIndex(a.sortSpec.Column)
+	a.persistSortSpec()
+
+	query := a.query
+	a.invalidatePendingRefreshes()
+	a.refreshReason.Store(refreshReasonSort)
+	if strings.TrimSpace(query) == "" {
+		if a.restoreEmptyQueryResults(sortSpec) {
+			return
+		}
+	}
+
+	a.requestRefreshAsyncWithReason(query, sortSpec, refreshReasonSort)
+	a.updateStatus()
 }
 
 func (a *App) refreshDataAsync(ctx context.Context, refreshID uint64, query string, sortSpec sorter.SortSpec) {
@@ -160,6 +235,7 @@ func (a *App) refreshDataAsync(ctx context.Context, refreshID uint64, query stri
 }
 
 func (a *App) refreshData(ctx context.Context) {
+	a.refreshReason.Store(refreshReasonForQuery(a.query))
 	a.setSearchState(searchStateRunning)
 	searchCtx, cleanup := a.newSearchContext(ctx)
 	defer cleanup()

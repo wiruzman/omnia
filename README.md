@@ -42,6 +42,25 @@ go install github.com/wiruzman/omnia/cmd/omnia@latest
 go install github.com/wiruzman/omnia/cmd/omnia-daemon@latest
 ```
 
+## Install with Homebrew
+
+```bash
+brew tap wiruzman/tap
+brew install omnia
+```
+
+Start the daemon as a Homebrew service:
+
+```bash
+brew services start wiruzman/tap/omnia
+```
+
+Stop the daemon service:
+
+```bash
+brew services stop wiruzman/tap/omnia
+```
+
 ## Run
 
 Start the daemon first:

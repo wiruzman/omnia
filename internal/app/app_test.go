@@ -820,6 +820,37 @@ func TestArrowRightUsesNativeHorizontalTableScroll(t *testing.T) {
 	}
 }
 
+func TestArrowRightDoesNotScrollWhenLastColumnAlreadyFits(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.table.SetRect(0, 0, 200, 5)
+
+	now := time.Now()
+	seedEntries(t, a, []model.Entry{{
+		Path:       "/tmp/" + strings.Repeat("p", 90),
+		Name:       strings.Repeat("n", 40),
+		ParentPath: "/tmp",
+		RootPath:   "/tmp",
+		Type:       model.TypeFile,
+		Size:       90,
+		CreatedAt:  now,
+		ModifiedAt: now,
+	}})
+
+	handler := a.table.InputHandler()
+	handler(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone), func(tview.Primitive) {})
+
+	if a.horizontalScrollCol != 0 {
+		t.Fatalf("expected right arrow to keep all columns visible, got scroll column %d", a.horizontalScrollCol)
+	}
+	if got := a.table.GetColumnCount(); got != len(tableHeaders) {
+		t.Fatalf("expected all table columns to remain rendered, got %d", got)
+	}
+	if got := a.table.GetCell(0, len(tableHeaders)-1).Text; !strings.Contains(got, "Modified") {
+		t.Fatalf("expected modified header to remain visible, got %q", got)
+	}
+}
+
 func TestSearchInputArrowsFocusResultsAndScrollColumns(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
@@ -910,7 +941,7 @@ func TestSearchInputPageKeysFocusResultsAndPageTable(t *testing.T) {
 	}
 }
 
-func TestArrowRightStopsOnceLastColumnIsVisible(t *testing.T) {
+func TestArrowRightStopsAsSoonAsLastColumnFits(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
 	a.table.SetRect(0, 0, 50, 5)
@@ -933,17 +964,23 @@ func TestArrowRightStopsOnceLastColumnIsVisible(t *testing.T) {
 	}
 	a.renderTable()
 
-	wantScrollCol := len(tableHeaders) - 2
+	wantScrollCol := 2
 	if a.horizontalScrollCol != wantScrollCol {
 		t.Fatalf("expected rightmost scroll column %d, got %d", wantScrollCol, a.horizontalScrollCol)
 	}
-	if got := a.table.GetColumnCount(); got != 2 {
-		t.Fatalf("expected last two columns to render, got %d columns", got)
+	if got := a.table.GetColumnCount(); got != 4 {
+		t.Fatalf("expected last four columns to render, got %d columns", got)
 	}
-	if got := a.table.GetCell(0, 0).Text; !strings.Contains(got, "Created") {
+	if got := a.table.GetCell(0, 0).Text; !strings.Contains(got, "Type") {
+		t.Fatalf("expected type header to stay visible, got %q", got)
+	}
+	if got := a.table.GetCell(0, 1).Text; !strings.Contains(got, "Size") {
+		t.Fatalf("expected size header to stay visible, got %q", got)
+	}
+	if got := a.table.GetCell(0, 2).Text; !strings.Contains(got, "Created") {
 		t.Fatalf("expected created header to stay visible, got %q", got)
 	}
-	if got := a.table.GetCell(0, 1).Text; !strings.Contains(got, "Modified") {
+	if got := a.table.GetCell(0, 3).Text; !strings.Contains(got, "Modified") {
 		t.Fatalf("expected modified header to stay visible, got %q", got)
 	}
 
@@ -960,7 +997,7 @@ func TestArrowRightStopsOnceLastColumnIsVisible(t *testing.T) {
 	screen.SetSize(50, 5)
 	a.table.Draw(screen)
 	_, colAtRightEdge := a.table.CellAt(49, 1)
-	if colAtRightEdge != 1 {
+	if colAtRightEdge != 3 {
 		t.Fatalf("expected modified column to fill right edge, got column %d", colAtRightEdge)
 	}
 }

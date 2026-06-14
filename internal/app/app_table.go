@@ -35,7 +35,7 @@ func (a *App) renderHeader(cols []int) {
 
 func (a *App) renderTable() {
 	a.selectedCol = clampColumnIndex(a.selectedCol)
-	a.horizontalScrollCol = clampHorizontalScrollCol(a.horizontalScrollCol)
+	a.horizontalScrollCol = a.clampHorizontalScrollCol(a.horizontalScrollCol)
 	cols := a.visibleColumns()
 	rowOffset, _ := a.table.GetOffset()
 
@@ -81,7 +81,7 @@ func (a *App) moveSelectionHorizontal(delta int) {
 
 func (a *App) scrollColumnsHorizontal(delta int) {
 	nextCol := a.horizontalScrollCol + delta
-	nextCol = clampHorizontalScrollCol(nextCol)
+	nextCol = a.clampHorizontalScrollCol(nextCol)
 	if nextCol == a.horizontalScrollCol {
 		return
 	}
@@ -133,18 +133,62 @@ func clampColumnIndex(col int) int {
 	return col
 }
 
-func clampHorizontalScrollCol(col int) int {
+func (a *App) clampHorizontalScrollCol(col int) int {
 	if col < 0 {
 		return 0
 	}
-	maxCol := len(tableHeaders) - 2
-	if maxCol < 0 {
-		maxCol = 0
-	}
+	maxCol := a.maxHorizontalScrollCol()
 	if col > maxCol {
 		return maxCol
 	}
 	return col
+}
+
+func (a *App) maxHorizontalScrollCol() int {
+	lastCol := len(tableHeaders) - 1
+	if lastCol <= 0 {
+		return 0
+	}
+
+	_, _, width, _ := a.table.GetInnerRect()
+	if width <= 0 {
+		return lastCol
+	}
+	for startCol := 0; startCol <= lastCol; startCol++ {
+		if a.columnsFitThroughLast(startCol, width) {
+			return startCol
+		}
+	}
+	return lastCol
+}
+
+func (a *App) columnsFitThroughLast(startCol, width int) bool {
+	used := 0
+	for p, col := range tableColumnsFrom(startCol) {
+		if p > 0 {
+			used++
+		}
+		used += a.tableColumnWidth(col)
+		if used > width {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *App) tableColumnWidth(col int) int {
+	col = clampColumnIndex(col)
+	width := tview.TaggedStringWidth(tableHeaders[col])
+	for _, entry := range a.entries {
+		cellWidth := tview.TaggedStringWidth(a.columnText(entry, col))
+		if maxWidth := tableColumnMaxWidths[col]; maxWidth > 0 && cellWidth > maxWidth {
+			cellWidth = maxWidth
+		}
+		if cellWidth > width {
+			width = cellWidth
+		}
+	}
+	return width
 }
 
 func sortColumnIndex(col sorter.Column) int {

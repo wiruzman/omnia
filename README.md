@@ -159,7 +159,7 @@ Issues and pull requests are welcome. See CONTRIBUTING.md for local checks and S
 
 ## License
 
-No license has been selected yet. Add a LICENSE file before publishing terms for reuse or accepting outside contributions.
+Omnia is released under the MIT License. See LICENSE for details.
 
 ## Limitations
 

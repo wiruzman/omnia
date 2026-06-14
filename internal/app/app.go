@@ -44,6 +44,7 @@ type App struct {
 	selected                    int
 	selectedCol                 int
 	horizontalScrollCol         int
+	tableRenderWidth            int
 	query                       string
 	shortcutHelpVisible         bool
 	sortSpec                    sorter.SortSpec

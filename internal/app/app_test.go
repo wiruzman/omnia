@@ -914,6 +914,98 @@ func TestEmptyResultsHeaderDoesNotExpandModifiedColumn(t *testing.T) {
 	}
 }
 
+func TestWideTableExpandsPathInsteadOfModified(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.table.SetRect(0, 0, 200, 5)
+
+	createdAt := time.Date(2025, 9, 27, 10, 59, 45, 0, time.UTC)
+	modifiedAt := time.Date(2026, 6, 13, 14, 24, 35, 0, time.UTC)
+	seedEntries(t, a, []model.Entry{{
+		Path:       "/tmp/" + strings.Repeat("path-segment/", 12) + "artifact.bin",
+		Name:       "artifact.bin",
+		ParentPath: "/tmp",
+		RootPath:   "/tmp",
+		Type:       model.TypeFile,
+		Size:       90,
+		CreatedAt:  createdAt,
+		ModifiedAt: modifiedAt,
+	}})
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer screen.Fini()
+	screen.SetSize(200, 5)
+	a.table.Draw(screen)
+
+	_, _, pathWidth := a.table.GetCell(1, 1).GetLastPosition()
+	modifiedX, _, modifiedWidth := a.table.GetCell(1, len(tableHeaders)-1).GetLastPosition()
+	pathText := a.table.GetCell(1, 1).Text
+	if pathWidth <= tableColumnMaxWidths[1] {
+		t.Fatalf("expected path column to expand beyond %d, got %d", tableColumnMaxWidths[1], pathWidth)
+	}
+	if tview.TaggedStringWidth(pathText) <= tableColumnMaxWidths[1] {
+		t.Fatalf("expected path text to use expanded column width, got width %d text %q", tview.TaggedStringWidth(pathText), pathText)
+	}
+	if !strings.HasSuffix(pathText, "artifact.bin") {
+		t.Fatalf("expected expanded path text to preserve filename suffix, got %q", pathText)
+	}
+	if modifiedWidth != tableColumnMaxWidths[len(tableHeaders)-1] {
+		t.Fatalf("expected modified column to stay compact at width %d, got %d", tableColumnMaxWidths[len(tableHeaders)-1], modifiedWidth)
+	}
+	if modifiedX+modifiedWidth < 199 {
+		t.Fatalf("expected modified column to reach the right edge, modified ends at x=%d", modifiedX+modifiedWidth)
+	}
+	_, colAtRightEdge := a.table.CellAt(199, 1)
+	if colAtRightEdge != len(tableHeaders)-1 {
+		t.Fatalf("expected modified column at the right edge, got column %d", colAtRightEdge)
+	}
+}
+
+func TestTableResizeRerendersExpandedPathText(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.table.SetRect(0, 0, 120, 5)
+
+	createdAt := time.Date(2025, 9, 27, 10, 59, 45, 0, time.UTC)
+	modifiedAt := time.Date(2026, 6, 13, 14, 24, 35, 0, time.UTC)
+	seedEntries(t, a, []model.Entry{{
+		Path:       "/tmp/" + strings.Repeat("path-segment/", 14) + "artifact.bin",
+		Name:       "artifact.bin",
+		ParentPath: "/tmp",
+		RootPath:   "/tmp",
+		Type:       model.TypeFile,
+		Size:       90,
+		CreatedAt:  createdAt,
+		ModifiedAt: modifiedAt,
+	}})
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer screen.Fini()
+	screen.SetSize(120, 5)
+	a.table.Draw(screen)
+	narrowPathText := a.table.GetCell(1, 1).Text
+	if tview.TaggedStringWidth(narrowPathText) != tableColumnMaxWidths[1] {
+		t.Fatalf("expected narrow path text to use base width %d, got width %d text %q", tableColumnMaxWidths[1], tview.TaggedStringWidth(narrowPathText), narrowPathText)
+	}
+
+	a.table.SetRect(0, 0, 200, 5)
+	screen.SetSize(200, 5)
+	a.table.Draw(screen)
+	widePathText := a.table.GetCell(1, 1).Text
+	if tview.TaggedStringWidth(widePathText) <= tview.TaggedStringWidth(narrowPathText) {
+		t.Fatalf("expected widened table to rerender longer path text, narrow=%q wide=%q", narrowPathText, widePathText)
+	}
+	if !strings.HasSuffix(widePathText, "artifact.bin") {
+		t.Fatalf("expected expanded path text to preserve filename suffix, got %q", widePathText)
+	}
+}
+
 func TestSearchInputArrowsFocusResultsAndScrollColumns(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)

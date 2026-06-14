@@ -145,27 +145,30 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) startInitialRefresh(ctx context.Context) {
-	a.queueCachedWarmStart(ctx)
+	warmStarted := a.queueCachedWarmStart(ctx)
 	if ctx.Err() != nil {
 		return
 	}
 	if strings.TrimSpace(a.query) != "" {
 		return
 	}
+	if warmStarted {
+		return
+	}
 	a.requestRefreshAsync(a.query, a.sortSpec)
 }
 
-func (a *App) queueCachedWarmStart(ctx context.Context) {
+func (a *App) queueCachedWarmStart(ctx context.Context) bool {
 	sortSpec := a.sortSpec
 	res, ok, err := a.loadWarmStartCache()
 	if err != nil {
 		a.logger.Printf("load startup cache failed: %v", err)
 	}
 	if err != nil || !ok {
-		return
+		return false
 	}
 	if ctx.Err() != nil {
-		return
+		return false
 	}
 	a.tui.QueueUpdateDraw(func() {
 		if strings.TrimSpace(a.query) != "" || len(a.entries) > 0 || a.sortSpec != sortSpec {
@@ -174,6 +177,7 @@ func (a *App) queueCachedWarmStart(ctx context.Context) {
 		a.rememberEmptyQueryResults("", sortSpec, res.Entries, res.Total)
 		a.applyResults(res.Entries, res.Total)
 	})
+	return true
 }
 
 func (a *App) loadWarmStartCache() (store.QueryResult, bool, error) {

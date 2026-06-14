@@ -53,6 +53,9 @@ func (a *App) confirmDeleteSelected() {
 	path := e.Path
 	modal := tview.NewModal().
 		SetText(fmt.Sprintf("Move this item to Trash?\n\n%s", trimMiddle(path, 120))).
+		SetTextColor(tcell.ColorDefault).
+		SetButtonStyle(tcell.StyleDefault).
+		SetButtonActivatedStyle(tcell.StyleDefault.Bold(true).Underline(true)).
 		AddButtons([]string{"Cancel", "Delete"}).
 		SetDoneFunc(func(_ int, buttonLabel string) {
 			a.pages.RemovePage("confirm-delete")

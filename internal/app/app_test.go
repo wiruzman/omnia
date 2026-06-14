@@ -354,6 +354,44 @@ func TestDeletePathStopsIfTrashFails(t *testing.T) {
 	}
 }
 
+func TestConfirmDeleteModalFocusedButtonIsReadable(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.entries = []model.Entry{{
+		Path: "/tmp/a.txt",
+		Name: "a.txt",
+		Type: model.TypeFile,
+	}}
+	a.selected = 0
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer screen.Fini()
+	screen.SetSize(80, 24)
+	a.tui.SetScreen(screen)
+	a.tui.SetRoot(a.pages, true)
+
+	a.confirmDeleteSelected()
+	a.tui.ForceDraw()
+
+	focusedButton, ok := a.tui.GetFocus().(*tview.Button)
+	if !ok {
+		t.Fatalf("expected modal focus to land on a button, got %T", a.tui.GetFocus())
+	}
+	styles, ok := screenTextStyles(screen, focusedButton.GetLabel())
+	if !ok {
+		t.Fatalf("expected confirmation modal to render focused button %q; screen:\n%s", focusedButton.GetLabel(), screenText(screen))
+	}
+	for _, style := range styles {
+		_, bg, _ := style.Decompose()
+		if bg != tcell.ColorDefault {
+			t.Fatalf("expected focused button %q to keep the terminal background for readability; hasFocus=%t style=%v", focusedButton.GetLabel(), focusedButton.HasFocus(), style)
+		}
+	}
+}
+
 func TestNoResultLiveQueryDoesNotFallbackToEmptyQuery(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
@@ -1591,4 +1629,47 @@ func TestCurrentPathProgressUsesDaemonStatus(t *testing.T) {
 	if rows[0].Scanned != 2 {
 		t.Fatalf("expected scanned > 0, got row %+v", rows[0])
 	}
+}
+
+func screenTextStyles(screen tcell.SimulationScreen, want string) ([]tcell.Style, bool) {
+	cells, width, height := screen.GetContents()
+	wantRunes := []rune(want)
+	for y := 0; y < height; y++ {
+		for x := 0; x <= width-len(wantRunes); x++ {
+			matched := true
+			for i, wantRune := range wantRunes {
+				cell := cells[y*width+x+i]
+				if len(cell.Runes) == 0 || cell.Runes[0] != wantRune {
+					matched = false
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+			styles := make([]tcell.Style, len(wantRunes))
+			for i := range wantRunes {
+				styles[i] = cells[y*width+x+i].Style
+			}
+			return styles, true
+		}
+	}
+	return nil, false
+}
+
+func screenText(screen tcell.SimulationScreen) string {
+	cells, width, height := screen.GetContents()
+	var b strings.Builder
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			cell := cells[y*width+x]
+			if len(cell.Runes) == 0 || cell.Runes[0] == 0 {
+				b.WriteByte(' ')
+				continue
+			}
+			b.WriteRune(cell.Runes[0])
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
 }

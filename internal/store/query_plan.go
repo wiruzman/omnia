@@ -3,9 +3,6 @@ package store
 import (
 	"strings"
 	"unicode/utf8"
-
-	"github.com/blevesearch/bleve/v2"
-	querypkg "github.com/blevesearch/bleve/v2/search/query"
 )
 
 const (
@@ -66,18 +63,4 @@ func (p queryPlan) shouldStopAfterPrefix(entries, limit int) bool {
 
 func runeLen(value string) int {
 	return utf8.RuneCountInString(value)
-}
-
-func bleveContainsQuery(field string, value string) querypkg.Query {
-	q := bleve.NewWildcardQuery("*" + value + "*")
-	q.SetField(field)
-	return q
-}
-
-func bleveContainsAllQuery(field string, terms []string) querypkg.Query {
-	queries := make([]querypkg.Query, 0, len(terms))
-	for _, term := range terms {
-		queries = append(queries, bleveContainsQuery(field, term))
-	}
-	return bleve.NewConjunctionQuery(queries...)
 }

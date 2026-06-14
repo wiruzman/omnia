@@ -102,7 +102,7 @@ func newTestApp(t *testing.T, sys *mockSystemAdapter) *App {
 	t.Setenv("HOME", t.TempDir())
 
 	cfg := config.Config{
-		IndexDBPath:   filepath.Join(t.TempDir(), "index.bleve"),
+		IndexDBPath:   filepath.Join(t.TempDir(), "index.sqlite"),
 		MaxResults:    5000,
 		DebounceMs:    5,
 		ScanBatchSize: 100,
@@ -111,7 +111,7 @@ func newTestApp(t *testing.T, sys *mockSystemAdapter) *App {
 		SortDirection: "ASC",
 	}
 
-	st, err := store.Open(cfg.IndexDBPath)
+	st, err := store.OpenSQLite(cfg.IndexDBPath)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestOpenRevealCopyUseSystemAdapter(t *testing.T) {
 	}
 }
 
-func TestNewStartsWhenDaemonRunningUsingReadonlySnapshot(t *testing.T) {
+func TestNewStartsWhenDaemonRunningUsingSQLiteStore(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -177,8 +177,7 @@ func TestNewStartsWhenDaemonRunningUsingReadonlySnapshot(t *testing.T) {
 	cfg := config.Config{
 		IncludePaths:  []string{home},
 		ExcludeGlobs:  []string{".git"},
-		IndexDBPath:   "index.bleve",
-		StoreBackend:  "bleve",
+		IndexDBPath:   "index.sqlite",
 		MaxResults:    100,
 		DebounceMs:    50,
 		ScanBatchSize: 100,
@@ -195,15 +194,14 @@ func TestNewStartsWhenDaemonRunningUsingReadonlySnapshot(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	readonlyPath := loaded.IndexDBPath + ".readonly"
-	roStore, err := store.Open(readonlyPath)
+	sqliteStore, err := store.OpenSQLite(loaded.IndexDBPath)
 	if err != nil {
-		t.Fatalf("open readonly snapshot store: %v", err)
+		t.Fatalf("open sqlite store: %v", err)
 	}
 	now := time.Now()
-	if err := roStore.UpsertBatch(context.Background(), now.UnixNano(), []model.Entry{{
-		Path:       "/tmp/snapshot.txt",
-		Name:       "snapshot.txt",
+	if err := sqliteStore.UpsertBatch(context.Background(), now.UnixNano(), []model.Entry{{
+		Path:       "/tmp/sqlite.txt",
+		Name:       "sqlite.txt",
 		ParentPath: "/tmp",
 		RootPath:   "/tmp",
 		Type:       model.TypeFile,
@@ -211,11 +209,11 @@ func TestNewStartsWhenDaemonRunningUsingReadonlySnapshot(t *testing.T) {
 		CreatedAt:  now,
 		ModifiedAt: now,
 	}}); err != nil {
-		_ = roStore.Close()
-		t.Fatalf("seed readonly snapshot store: %v", err)
+		_ = sqliteStore.Close()
+		t.Fatalf("seed sqlite store: %v", err)
 	}
-	if err := roStore.Close(); err != nil {
-		t.Fatalf("close readonly snapshot store: %v", err)
+	if err := sqliteStore.Close(); err != nil {
+		t.Fatalf("close sqlite store: %v", err)
 	}
 
 	if err := daemonstate.Write(loaded.DaemonStatusPath(), daemonstate.Status{Running: true, Indexing: true}); err != nil {
@@ -230,10 +228,10 @@ func TestNewStartsWhenDaemonRunningUsingReadonlySnapshot(t *testing.T) {
 
 	count, err := a.store.Count(context.Background())
 	if err != nil {
-		t.Fatalf("count readonly snapshot entries: %v", err)
+		t.Fatalf("count sqlite entries: %v", err)
 	}
 	if count != 1 {
-		t.Fatalf("expected 1 entry in readonly snapshot, got %d", count)
+		t.Fatalf("expected 1 sqlite entry, got %d", count)
 	}
 }
 
@@ -252,7 +250,6 @@ func TestNewUsesSQLiteDirectReadOnlyStore(t *testing.T) {
 		IncludePaths:  []string{home},
 		ExcludeGlobs:  []string{".git"},
 		IndexDBPath:   "index.sqlite",
-		StoreBackend:  "sqlite",
 		MaxResults:    100,
 		DebounceMs:    50,
 		ScanBatchSize: 100,
@@ -268,7 +265,7 @@ func TestNewUsesSQLiteDirectReadOnlyStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	sqliteStore, err := store.OpenWithBackend(loaded.IndexDBPath, loaded.StoreBackend)
+	sqliteStore, err := store.OpenSQLite(loaded.IndexDBPath)
 	if err != nil {
 		t.Fatalf("open sqlite store: %v", err)
 	}
@@ -709,8 +706,7 @@ func TestNewStartsOnNameColumnWithConfiguredSizeSort(t *testing.T) {
 	cfg := config.Config{
 		IncludePaths:  []string{home},
 		ExcludeGlobs:  []string{".git"},
-		IndexDBPath:   "index.bleve",
-		StoreBackend:  "bleve",
+		IndexDBPath:   "index.sqlite",
 		MaxResults:    100,
 		DebounceMs:    50,
 		ScanBatchSize: 100,
@@ -726,13 +722,12 @@ func TestNewStartsOnNameColumnWithConfiguredSizeSort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	readonlyPath := loaded.IndexDBPath + ".readonly"
-	roStore, err := store.Open(readonlyPath)
+	sqliteStore, err := store.OpenSQLite(loaded.IndexDBPath)
 	if err != nil {
-		t.Fatalf("open readonly snapshot store: %v", err)
+		t.Fatalf("open sqlite store: %v", err)
 	}
-	if err := roStore.Close(); err != nil {
-		t.Fatalf("close readonly snapshot store: %v", err)
+	if err := sqliteStore.Close(); err != nil {
+		t.Fatalf("close sqlite store: %v", err)
 	}
 
 	a, err := New()

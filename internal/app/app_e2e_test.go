@@ -80,8 +80,7 @@ func newE2EApp(t *testing.T, root string, batchSize int) (*App, *meteredBackend)
 			".Trash",
 			"Trash",
 		},
-		IndexDBPath:   filepath.Join(t.TempDir(), "index.bleve"),
-		StoreBackend:  "bleve",
+		IndexDBPath:   filepath.Join(t.TempDir(), "index.sqlite"),
 		MaxResults:    5000,
 		DebounceMs:    5,
 		ScanBatchSize: batchSize,
@@ -90,7 +89,7 @@ func newE2EApp(t *testing.T, root string, batchSize int) (*App, *meteredBackend)
 		SortDirection: "ASC",
 	}
 
-	st, err := store.Open(cfg.IndexDBPath)
+	st, err := store.OpenSQLite(cfg.IndexDBPath)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

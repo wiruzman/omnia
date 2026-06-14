@@ -10,7 +10,6 @@
     "Trash"
   ],
   "index_db_path": "index.sqlite",
-  "store_backend": "sqlite",
   "daemon_dir": "daemon",
   "sort_column": "name",
   "sort_direction": "ASC",

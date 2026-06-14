@@ -11,18 +11,6 @@ import (
 	"omnia-search-tui/internal/sorter"
 )
 
-func TestOpenWithBackendDefaultsToSQLite(t *testing.T) {
-	st, err := OpenWithBackend(filepath.Join(t.TempDir(), "index.sqlite"), "")
-	if err != nil {
-		t.Fatalf("open default backend: %v", err)
-	}
-	defer st.Close()
-
-	if _, ok := st.(*SQLiteStore); !ok {
-		t.Fatalf("expected default backend to be SQLite, got %T", st)
-	}
-}
-
 func TestSQLiteInterruptOnCancelStopsRunningStatement(t *testing.T) {
 	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
 	if err != nil {

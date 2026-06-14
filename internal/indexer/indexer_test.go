@@ -23,14 +23,14 @@ func TestStartReindexWritesSortedStartupCacheFromScan(t *testing.T) {
 
 	cfg := config.Config{
 		IncludePaths:  []string{root},
-		IndexDBPath:   filepath.Join(t.TempDir(), "index.bleve"),
+		IndexDBPath:   filepath.Join(t.TempDir(), "index.sqlite"),
 		MaxResults:    400,
 		ScanBatchSize: 1,
 		DaemonDir:     t.TempDir(),
 		SortColumn:    string(sorter.SortSize),
 		SortDirection: string(sorter.Desc),
 	}
-	st, err := store.Open(cfg.IndexDBPath)
+	st, err := store.OpenSQLite(cfg.IndexDBPath)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

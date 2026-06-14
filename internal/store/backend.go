@@ -2,8 +2,6 @@ package store
 
 import (
 	"context"
-	"fmt"
-	"strings"
 
 	"omnia-search-tui/internal/model"
 	"omnia-search-tui/internal/sorter"
@@ -22,41 +20,4 @@ type Backend interface {
 	DeletePath(ctx context.Context, path string) error
 	DeletePathPrefix(ctx context.Context, dirPath string) error
 	Close() error
-}
-
-func NormalizeBackend(backend string) string {
-	switch strings.ToLower(strings.TrimSpace(backend)) {
-	case "", "sqlite", "fts5", "sqlite_fts5", "sqlite-fts5":
-		return "sqlite"
-	case "bleve":
-		return "bleve"
-	default:
-		return strings.ToLower(strings.TrimSpace(backend))
-	}
-}
-
-func UsesDirectReadOnly(backend string) bool {
-	return NormalizeBackend(backend) == "sqlite"
-}
-
-func OpenWithBackend(path, backend string) (Backend, error) {
-	switch NormalizeBackend(backend) {
-	case "sqlite":
-		return OpenSQLite(path)
-	case "bleve":
-		return Open(path)
-	default:
-		return nil, fmt.Errorf("unsupported store backend: %s", backend)
-	}
-}
-
-func OpenReadOnlyWithBackend(path, backend string) (Backend, error) {
-	switch NormalizeBackend(backend) {
-	case "sqlite":
-		return OpenSQLiteReadOnly(path)
-	case "bleve":
-		return OpenReadOnly(path)
-	default:
-		return nil, fmt.Errorf("unsupported store backend: %s", backend)
-	}
 }

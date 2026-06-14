@@ -13,22 +13,28 @@ import (
 var tableHeaders = [...]string{"Name", "Path", "Type", "Size", "Created", "Modified"}
 var tableColumnMaxWidths = [...]int{40, 80, 10, 12, 19, 19}
 
-func (a *App) renderHeader(cols []int) {
+type tableColumnLayout struct {
+	col       int
+	maxWidth  int
+	expansion int
+}
+
+func (a *App) renderHeader(layouts []tableColumnLayout) {
 	selectedCol := clampColumnIndex(a.selectedCol)
-	for p, c := range cols {
+	for p, layout := range layouts {
+		c := layout.col
 		h := tableHeaders[c]
-		expansion := 0
-		if p == len(cols)-1 {
-			expansion = 1
-		}
 		cell := tview.NewTableCell(fmt.Sprintf("[::b]%s", h)).
 			SetSelectable(false).
 			SetBackgroundColor(tcell.ColorDefault).
-			SetExpansion(expansion)
+			SetExpansion(layout.expansion)
+		if align := tableColumnAlign(c); align != tview.AlignLeft {
+			cell.SetAlign(align)
+		}
 		if c == selectedCol {
 			cell.SetAttributes(tcell.AttrBold | tcell.AttrUnderline)
 		}
-		cell.SetMaxWidth(tableColumnMaxWidths[c])
+		cell.SetMaxWidth(layout.maxWidth)
 		a.table.SetCell(0, p, cell)
 	}
 }
@@ -36,27 +42,22 @@ func (a *App) renderHeader(cols []int) {
 func (a *App) renderTable() {
 	a.selectedCol = clampColumnIndex(a.selectedCol)
 	a.horizontalScrollCol = a.clampHorizontalScrollCol(a.horizontalScrollCol)
-	cols := a.visibleColumns()
+	layouts := a.visibleColumnLayouts()
 	rowOffset, _ := a.table.GetOffset()
 
 	a.table.Clear()
 	a.table.SetOffset(rowOffset, 0)
-	a.renderHeader(cols)
+	a.renderHeader(layouts)
 	for i, e := range a.entries {
 		row := i + 1
-		for p, c := range cols {
+		for p, layout := range layouts {
+			c := layout.col
 			text := a.columnText(e, c)
-			expansion := 0
-			if p == len(cols)-1 {
-				expansion = 1
-			}
 			cell := tview.NewTableCell(text).
 				SetBackgroundColor(tcell.ColorDefault).
-				SetExpansion(expansion).
-				SetMaxWidth(tableColumnMaxWidths[c])
-			if c == 3 {
-				cell.SetAlign(tview.AlignRight)
-			}
+				SetExpansion(layout.expansion).
+				SetMaxWidth(layout.maxWidth)
+			cell.SetAlign(tableColumnAlign(c))
 			a.table.SetCell(row, p, cell)
 		}
 	}
@@ -90,7 +91,49 @@ func (a *App) scrollColumnsHorizontal(delta int) {
 }
 
 func (a *App) visibleColumns() []int {
-	return tableColumnsFrom(a.horizontalScrollCol)
+	layouts := a.visibleColumnLayouts()
+	cols := make([]int, len(layouts))
+	for i, layout := range layouts {
+		cols[i] = layout.col
+	}
+	return cols
+}
+
+func (a *App) visibleColumnLayouts() []tableColumnLayout {
+	cols := tableColumnsFrom(a.horizontalScrollCol)
+	if a.horizontalScrollCol > 0 && a.horizontalScrollCol == a.maxHorizontalScrollCol() {
+		return a.rightmostColumnLayouts(cols)
+	}
+	return makeTableColumnLayouts(cols, len(cols)-1)
+}
+
+func (a *App) rightmostColumnLayouts(cols []int) []tableColumnLayout {
+	layouts := makeTableColumnLayouts(cols, -1)
+	_, _, width, _ := a.table.GetInnerRect()
+	if width <= 0 {
+		return layouts
+	}
+
+	remaining := width - a.columnsDisplayWidth(cols)
+	for col := a.horizontalScrollCol - 1; col >= 0 && remaining > 1; col-- {
+		colWidth := a.tableColumnWidth(col)
+		maxWidth := remaining - 1
+		if colWidth < maxWidth {
+			maxWidth = colWidth
+		}
+		if maxWidth <= 0 {
+			break
+		}
+		layouts = append([]tableColumnLayout{{
+			col:      col,
+			maxWidth: maxWidth,
+		}}, layouts...)
+		remaining -= maxWidth + 1
+		if maxWidth < colWidth {
+			break
+		}
+	}
+	return layouts
 }
 
 func (a *App) logicalColumnForPhysical(physicalCol int) int {
@@ -163,17 +206,18 @@ func (a *App) maxHorizontalScrollCol() int {
 }
 
 func (a *App) columnsFitThroughLast(startCol, width int) bool {
-	used := 0
-	for p, col := range tableColumnsFrom(startCol) {
-		if p > 0 {
-			used++
-		}
-		used += a.tableColumnWidth(col)
-		if used > width {
-			return false
-		}
+	return a.columnsDisplayWidth(tableColumnsFrom(startCol)) <= width
+}
+
+func (a *App) columnsDisplayWidth(cols []int) int {
+	if len(cols) == 0 {
+		return 0
 	}
-	return true
+	used := len(cols) - 1
+	for _, col := range cols {
+		used += a.tableColumnWidth(col)
+	}
+	return used
 }
 
 func (a *App) tableColumnWidth(col int) int {
@@ -189,6 +233,31 @@ func (a *App) tableColumnWidth(col int) int {
 		}
 	}
 	return width
+}
+
+func makeTableColumnLayouts(cols []int, expandingPosition int) []tableColumnLayout {
+	layouts := make([]tableColumnLayout, len(cols))
+	for p, col := range cols {
+		expansion := 0
+		if p == expandingPosition {
+			expansion = 1
+		}
+		layouts[p] = tableColumnLayout{
+			col:       col,
+			maxWidth:  tableColumnMaxWidths[col],
+			expansion: expansion,
+		}
+	}
+	return layouts
+}
+
+func tableColumnAlign(col int) int {
+	switch col {
+	case 3, len(tableHeaders) - 1:
+		return tview.AlignRight
+	default:
+		return tview.AlignLeft
+	}
 }
 
 func sortColumnIndex(col sorter.Column) int {

@@ -910,7 +910,7 @@ func TestSearchInputPageKeysFocusResultsAndPageTable(t *testing.T) {
 	}
 }
 
-func TestArrowRightStaysOnRightmostColumn(t *testing.T) {
+func TestArrowRightStopsOnceLastColumnIsVisible(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
 	a.table.SetRect(0, 0, 50, 5)
@@ -933,14 +933,23 @@ func TestArrowRightStaysOnRightmostColumn(t *testing.T) {
 	}
 	a.renderTable()
 
-	if a.horizontalScrollCol != len(tableHeaders)-1 {
-		t.Fatalf("expected rightmost scroll column %d, got %d", len(tableHeaders)-1, a.horizontalScrollCol)
+	wantScrollCol := len(tableHeaders) - 2
+	if a.horizontalScrollCol != wantScrollCol {
+		t.Fatalf("expected rightmost scroll column %d, got %d", wantScrollCol, a.horizontalScrollCol)
 	}
-	if got := a.table.GetColumnCount(); got != 1 {
-		t.Fatalf("expected only the rightmost column to render, got %d columns", got)
+	if got := a.table.GetColumnCount(); got != 2 {
+		t.Fatalf("expected last two columns to render, got %d columns", got)
 	}
-	if got := a.table.GetCell(0, 0).Text; !strings.Contains(got, "Modified") {
+	if got := a.table.GetCell(0, 0).Text; !strings.Contains(got, "Created") {
+		t.Fatalf("expected created header to stay visible, got %q", got)
+	}
+	if got := a.table.GetCell(0, 1).Text; !strings.Contains(got, "Modified") {
 		t.Fatalf("expected modified header to stay visible, got %q", got)
+	}
+
+	handler(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone), func(tview.Primitive) {})
+	if a.horizontalScrollCol != wantScrollCol {
+		t.Fatalf("expected right arrow to stop at scroll column %d, got %d", wantScrollCol, a.horizontalScrollCol)
 	}
 
 	screen := tcell.NewSimulationScreen("UTF-8")
@@ -951,8 +960,8 @@ func TestArrowRightStaysOnRightmostColumn(t *testing.T) {
 	screen.SetSize(50, 5)
 	a.table.Draw(screen)
 	_, colAtRightEdge := a.table.CellAt(49, 1)
-	if colAtRightEdge != 0 {
-		t.Fatalf("expected rightmost column to fill right edge, got column %d", colAtRightEdge)
+	if colAtRightEdge != 1 {
+		t.Fatalf("expected modified column to fill right edge, got column %d", colAtRightEdge)
 	}
 }
 

@@ -40,9 +40,9 @@ func (a *App) updateStatus() {
 		frame := frames[(time.Now().UnixNano()/int64(200*time.Millisecond))%int64(len(frames))]
 		deleteText = fmt.Sprintf(" | deleting: %s %s", frame, trimMiddle(deletePath, 60))
 	}
-	searchText := a.searchStateText()
-	a.status.SetText(fmt.Sprintf("%s | visible: %d | search: %s | sort: %s %s | %s%s | query: %s",
-		countLabel, a.visible, searchText, a.sortSpec.Column, a.sortSpec.Direction, indexText, deleteText, query))
+	activityText := a.activityText()
+	a.status.SetText(fmt.Sprintf("%s | visible: %d | activity: %s | sort: %s %s | %s%s | query: %s",
+		countLabel, a.visible, activityText, a.sortSpec.Column, a.sortSpec.Direction, indexText, deleteText, query))
 	a.renderProgressTable()
 }
 

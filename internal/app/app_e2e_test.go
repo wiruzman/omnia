@@ -347,7 +347,7 @@ func TestE2ELiveTUISearchIsCappedAndResponsiveOnLargeIndex(t *testing.T) {
 	}
 }
 
-func TestE2EStartupPreviewRendersBeforeFullRefreshCompletes(t *testing.T) {
+func TestE2EStartupPreviewDoesNotBlockFirstSearch(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)
 	a.sortSpec = sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc}
@@ -372,6 +372,20 @@ func TestE2EStartupPreviewRendersBeforeFullRefreshCompletes(t *testing.T) {
 		t.Fatalf("seed startup cache: %v", err)
 	}
 
+	sqlEntry := model.Entry{
+		Path:       "/fixture/sql-guide.txt",
+		Name:       "sql-guide.txt",
+		ParentPath: "/fixture",
+		RootPath:   "/fixture",
+		Type:       model.TypeFile,
+		Size:       10,
+		CreatedAt:  now,
+		ModifiedAt: now,
+	}
+	if err := a.store.UpsertBatch(context.Background(), now.UnixMicro(), []model.Entry{sqlEntry}); err != nil {
+		t.Fatalf("seed sql search entry: %v", err)
+	}
+
 	backend := &blockingStartupBackend{
 		Backend:      a.store,
 		queryStarted: make(chan struct{}),
@@ -388,14 +402,19 @@ func TestE2EStartupPreviewRendersBeforeFullRefreshCompletes(t *testing.T) {
 	waitForScreenText(t, screen, "Size", 2*time.Second)
 	waitForScreenText(t, screen, "90 B", 2*time.Second)
 	waitForScreenText(t, screen, "quick-preview.txt", 2*time.Second)
-	waitForCondition(t, 2*time.Second, func() bool {
-		select {
-		case <-backend.queryStarted:
-			return true
-		default:
-			return false
-		}
-	}, "expected full startup refresh to start after preview")
+
+	select {
+	case <-backend.queryStarted:
+		t.Fatal("expected cached startup preview not to start a blocking empty refresh")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if !screen.InjectKeyBytes([]byte("sql")) {
+		t.Fatal("failed to inject first search query")
+	}
+	waitForScreenText(t, screen, "sql-guide.txt", 2*time.Second)
+	waitForScreenText(t, screen, "query: sql", 2*time.Second)
+
 	releaseOnce.Do(func() {
 		close(backend.releaseQuery)
 	})

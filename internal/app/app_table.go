@@ -27,7 +27,7 @@ func (a *App) renderHeader(layouts []tableColumnLayout) {
 		cell := tview.NewTableCell(fmt.Sprintf("[::b]%s", h)).
 			SetSelectable(false).
 			SetBackgroundColor(tcell.ColorDefault).
-			SetExpansion(layout.expansion)
+			SetExpansion(0)
 		if align := tableColumnAlign(c); align != tview.AlignLeft {
 			cell.SetAlign(align)
 		}

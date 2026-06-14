@@ -162,10 +162,11 @@ func TestShouldRefreshIndexedTotal(t *testing.T) {
 		lastCountAt    time.Time
 		wantShouldTick bool
 	}{
-		{name: "indexing running and interval elapsed", indexing: true, needsRecount: false, lastCountAt: ready, wantShouldTick: true},
+		{name: "indexing running and interval elapsed", indexing: true, needsRecount: false, lastCountAt: ready, wantShouldTick: false},
 		{name: "needs recount and interval elapsed", indexing: false, needsRecount: true, lastCountAt: ready, wantShouldTick: true},
 		{name: "neither indexing nor recount needed", indexing: false, needsRecount: false, lastCountAt: ready, wantShouldTick: false},
-		{name: "interval not elapsed", indexing: true, needsRecount: true, lastCountAt: notReady, wantShouldTick: false},
+		{name: "indexing running with recount needed", indexing: true, needsRecount: true, lastCountAt: ready, wantShouldTick: false},
+		{name: "interval not elapsed", indexing: false, needsRecount: true, lastCountAt: notReady, wantShouldTick: false},
 	}
 
 	for _, tc := range cases {

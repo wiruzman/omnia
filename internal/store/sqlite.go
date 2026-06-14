@@ -254,11 +254,7 @@ func (s *SQLiteStore) Preview(ctx context.Context, sort sorter.SortSpec, limit i
 	if err != nil {
 		return QueryResult{}, err
 	}
-	total, err := s.Count(ctx)
-	if err != nil {
-		return QueryResult{}, err
-	}
-	return QueryResult{Entries: entries, Total: total}, nil
+	return QueryResult{Entries: entries, Total: len(entries)}, nil
 }
 
 func (s *SQLiteStore) Query(ctx context.Context, query string, sortSpec sorter.SortSpec, limit, offset int) (QueryResult, error) {
@@ -278,11 +274,7 @@ func (s *SQLiteStore) Query(ctx context.Context, query string, sortSpec sorter.S
 		if err != nil {
 			return QueryResult{}, err
 		}
-		total, err := s.Count(ctx)
-		if err != nil {
-			return QueryResult{}, err
-		}
-		return QueryResult{Entries: entries, Total: total}, nil
+		return QueryResult{Entries: entries, Total: offset + len(entries)}, nil
 	}
 
 	entries := make([]model.Entry, 0, limit)
@@ -490,8 +482,12 @@ func (s *SQLiteStore) setup() error {
 		"CREATE INDEX IF NOT EXISTS entries_name_lower_idx ON entries(name_lower, path_lower);",
 		"CREATE INDEX IF NOT EXISTS entries_path_lower_idx ON entries(path_lower);",
 		"CREATE INDEX IF NOT EXISTS entries_modified_idx ON entries(modified_at, path_lower);",
+		"CREATE INDEX IF NOT EXISTS entries_modified_desc_idx ON entries(modified_at DESC, path_lower ASC);",
 		"CREATE INDEX IF NOT EXISTS entries_created_idx ON entries(created_at, path_lower);",
+		"CREATE INDEX IF NOT EXISTS entries_created_desc_idx ON entries(created_at DESC, path_lower ASC);",
 		"CREATE INDEX IF NOT EXISTS entries_size_idx ON entries(size, path_lower);",
+		"CREATE INDEX IF NOT EXISTS entries_size_desc_idx ON entries(size DESC, path_lower ASC);",
+		"CREATE INDEX IF NOT EXISTS entries_name_lower_desc_idx ON entries(name_lower DESC, path_lower ASC);",
 		"CREATE INDEX IF NOT EXISTS entries_root_scan_idx ON entries(root_path, last_seen_scan);",
 		"CREATE VIRTUAL TABLE IF NOT EXISTS name_fts USING fts5(name_lower, tokenize = 'trigram');",
 		"CREATE VIRTUAL TABLE IF NOT EXISTS path_fts USING fts5(path_lower, tokenize = 'trigram');",

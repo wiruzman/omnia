@@ -223,7 +223,7 @@ func (s *SQLiteStore) Count(ctx context.Context) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	count, err := s.countWhere("", nil)
+	count, err := s.countWhere(ctx, "", nil)
 	if err != nil {
 		return 0, err
 	}
@@ -240,7 +240,7 @@ func (s *SQLiteStore) CountByRoots(ctx context.Context, roots []string) (map[str
 			return nil, err
 		}
 		cleanRoot := filepath.Clean(root)
-		count, err := s.countWhere("root_path = ?", []any{cleanRoot})
+		count, err := s.countWhere(ctx, "root_path = ?", []any{cleanRoot})
 		if err != nil {
 			return nil, err
 		}
@@ -596,7 +596,7 @@ func (s *SQLiteStore) queryEntries(ctx context.Context, from string, where strin
 	return entries, nil
 }
 
-func (s *SQLiteStore) countWhere(where string, args []any) (int, error) {
+func (s *SQLiteStore) countWhere(ctx context.Context, where string, args []any) (int, error) {
 	sql := "SELECT count(*) FROM entries"
 	if where != "" {
 		sql += " WHERE " + where
@@ -608,6 +608,8 @@ func (s *SQLiteStore) countWhere(where string, args []any) (int, error) {
 		return 0, err
 	}
 	defer stmt.Finalize()
+	stopInterrupt := s.db.interruptOnCancel(ctx)
+	defer stopInterrupt()
 
 	for i, arg := range args {
 		if err := bindSQLiteAny(stmt, i+1, arg); err != nil {
@@ -617,6 +619,9 @@ func (s *SQLiteStore) countWhere(where string, args []any) (int, error) {
 
 	row, err := stmt.Step()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, ctxErr
+		}
 		return 0, err
 	}
 	if !row {

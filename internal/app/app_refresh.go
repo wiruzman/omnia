@@ -20,7 +20,10 @@ const (
 	searchStateDone
 )
 
-const liveSearchLimitCap = 1200
+const (
+	liveSearchLimitCap = 1200
+	liveSearchTimeout  = 900 * time.Millisecond
+)
 
 func (a *App) setSearchState(state uint32) {
 	a.searchState.Store(state)
@@ -177,7 +180,6 @@ func (a *App) refreshData(ctx context.Context) {
 
 func (a *App) queryEntries(ctx context.Context, query string, sortSpec sorter.SortSpec) ([]model.Entry, int, error) {
 	qLower := strings.ToLower(strings.TrimSpace(query))
-	allowBroadFallback := len(qLower) >= 5 || strings.Contains(qLower, "/")
 	queryLimit := a.cfg.MaxResults
 	if qLower != "" {
 		queryLimit = effectiveLiveSearchLimit(queryLimit)
@@ -188,50 +190,19 @@ func (a *App) queryEntries(ctx context.Context, query string, sortSpec sorter.So
 	if qLower != "" {
 		// Keep live search responsive while users type; empty-query refreshes may need
 		// more time on very large indexes to compute sorted top-N correctly.
-		queryCtx, cancel = context.WithTimeout(ctx, 3*time.Second)
+		queryCtx, cancel = context.WithTimeout(ctx, liveSearchTimeout)
 	}
 	defer cancel()
 
 	res, err := a.storeQuery(queryCtx, query, sortSpec, queryLimit, 0)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) && strings.TrimSpace(query) != "" {
-			fallbackLimit := queryLimit
-			if fallbackLimit < 200 {
-				fallbackLimit = 200
-			}
-
-			fallbackCtx, fallbackCancel := context.WithTimeout(ctx, 1200*time.Millisecond)
-			defer fallbackCancel()
-			fallback, ferr := a.storeQuery(fallbackCtx, "", sortSpec, fallbackLimit*2, 0)
-			if ferr == nil {
-				filtered := filterFallbackEntries(query, fallback.Entries, queryLimit)
-				return filtered, len(filtered), nil
-			}
-
 			// Always update UI state on timeout instead of keeping stale rows.
 			return []model.Entry{}, 0, nil
 		}
 		return nil, 0, err
 	}
-	entries := res.Entries
-
-	if qLower != "" && len(entries) == 0 && !a.isIndexing() && allowBroadFallback {
-		fallbackLimit := queryLimit
-		if fallbackLimit < 200 {
-			fallbackLimit = 200
-		}
-
-		fallbackCtx, fallbackCancel := context.WithTimeout(ctx, 700*time.Millisecond)
-		defer fallbackCancel()
-
-		fallback, err := a.storeQuery(fallbackCtx, "", sortSpec, fallbackLimit*2, 0)
-		if err == nil {
-			filtered := filterFallbackEntries(query, fallback.Entries, queryLimit)
-			entries = filtered
-			res.Total = len(filtered)
-		}
-	}
-	return entries, res.Total, nil
+	return res.Entries, res.Total, nil
 }
 
 func effectiveLiveSearchLimit(maxResults int) int {
@@ -242,56 +213,6 @@ func effectiveLiveSearchLimit(maxResults int) int {
 		return liveSearchLimitCap
 	}
 	return maxResults
-}
-
-func filterFallbackEntries(query string, source []model.Entry, limit int) []model.Entry {
-	qLower := strings.ToLower(strings.TrimSpace(query))
-	if qLower == "" || limit <= 0 {
-		return nil
-	}
-	allowPathContains := len(qLower) >= 5 || strings.Contains(qLower, "/")
-
-	namePrefix := make([]model.Entry, 0, limit)
-	nameContains := make([]model.Entry, 0, limit)
-	pathContains := make([]model.Entry, 0, limit)
-	seen := make(map[string]struct{}, limit)
-
-	for _, e := range source {
-		nameLower := strings.ToLower(e.Name)
-		pathLower := strings.ToLower(e.Path)
-
-		if strings.HasPrefix(nameLower, qLower) {
-			if _, ok := seen[e.Path]; !ok {
-				namePrefix = append(namePrefix, e)
-				seen[e.Path] = struct{}{}
-			}
-			continue
-		}
-		if strings.Contains(nameLower, qLower) {
-			if _, ok := seen[e.Path]; !ok {
-				nameContains = append(nameContains, e)
-				seen[e.Path] = struct{}{}
-			}
-			continue
-		}
-		if allowPathContains && strings.Contains(pathLower, qLower) {
-			if _, ok := seen[e.Path]; !ok {
-				pathContains = append(pathContains, e)
-				seen[e.Path] = struct{}{}
-			}
-		}
-	}
-
-	out := make([]model.Entry, 0, limit)
-	for _, bucket := range [][]model.Entry{namePrefix, nameContains, pathContains} {
-		for _, e := range bucket {
-			out = append(out, e)
-			if len(out) >= limit {
-				return out
-			}
-		}
-	}
-	return out
 }
 
 func (a *App) applyResults(entries []model.Entry, total int) {

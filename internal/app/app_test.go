@@ -33,6 +33,47 @@ type mockSystemAdapter struct {
 	trashErr    error
 }
 
+type noResultBlockingEmptyBackend struct {
+	store.Backend
+
+	emptyStarted chan struct{}
+	releaseEmpty chan struct{}
+}
+
+func (b *noResultBlockingEmptyBackend) Query(ctx context.Context, query string, sort sorter.SortSpec, limit, offset int) (store.QueryResult, error) {
+	if strings.TrimSpace(query) == "" {
+		select {
+		case b.emptyStarted <- struct{}{}:
+		default:
+		}
+		select {
+		case <-b.releaseEmpty:
+			return b.Backend.Query(ctx, query, sort, limit, offset)
+		case <-ctx.Done():
+			return store.QueryResult{}, ctx.Err()
+		}
+	}
+	return store.QueryResult{}, nil
+}
+
+type timeoutQueryBackend struct {
+	store.Backend
+
+	emptyStarted chan struct{}
+}
+
+func (b *timeoutQueryBackend) Query(ctx context.Context, query string, sort sorter.SortSpec, limit, offset int) (store.QueryResult, error) {
+	if strings.TrimSpace(query) == "" {
+		select {
+		case b.emptyStarted <- struct{}{}:
+		default:
+		}
+		return store.QueryResult{}, ctx.Err()
+	}
+	<-ctx.Done()
+	return store.QueryResult{}, ctx.Err()
+}
+
 func (m *mockSystemAdapter) OpenPath(path string) error {
 	m.openCalls = append(m.openCalls, path)
 	return nil
@@ -312,24 +353,60 @@ func TestDeletePathStopsIfTrashFails(t *testing.T) {
 	}
 }
 
-func TestFilterFallbackEntriesPrioritizesRelevantContains(t *testing.T) {
-	entries := []model.Entry{
-		{Path: "/tmp/haos_generic-aarch64-13.2.qcow2", Name: "haos_generic-aarch64-13.2.qcow2"},
-		{Path: "/tmp/LogiMgr.pkg", Name: "LogiMgr.pkg"},
-		{Path: "/tmp/logioptionsplus_installer_offline.zip", Name: "logioptionsplus_installer_offline.zip"},
-		{Path: "/opt/vendor/pkg.bin", Name: "pkg.bin"},
-	}
+func TestNoResultLiveQueryDoesNotFallbackToEmptyQuery(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
 
-	filtered := filterFallbackEntries("logi", entries, 10)
-	if len(filtered) != 2 {
-		t.Fatalf("expected 2 relevant entries, got %d", len(filtered))
+	backend := &noResultBlockingEmptyBackend{
+		Backend:      a.store,
+		emptyStarted: make(chan struct{}, 1),
+		releaseEmpty: make(chan struct{}),
 	}
-	got := map[string]bool{
-		filtered[0].Name: true,
-		filtered[1].Name: true,
+	a.store = backend
+	defer close(backend.releaseEmpty)
+
+	entries, total, err := a.queryEntries(context.Background(), "definitely-not-found", a.sortSpec)
+	if err != nil {
+		t.Fatalf("query entries: %v", err)
 	}
-	if !got["logioptionsplus_installer_offline.zip"] || !got["LogiMgr.pkg"] {
-		t.Fatalf("expected only logi-related name hits, got %#v", got)
+	if len(entries) != 0 || total != 0 {
+		t.Fatalf("expected no results, got len=%d total=%d", len(entries), total)
+	}
+	select {
+	case <-backend.emptyStarted:
+		t.Fatal("expected no-result live query not to run empty-query fallback")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestTimedOutLiveQueryDoesNotFallbackToEmptyQuery(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+
+	backend := &timeoutQueryBackend{
+		Backend:      a.store,
+		emptyStarted: make(chan struct{}, 1),
+	}
+	a.store = backend
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	entries, total, err := a.queryEntries(ctx, "slow-missing-query", a.sortSpec)
+	if err != nil {
+		t.Fatalf("query entries: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("expected timed out query to return promptly, took %s", elapsed)
+	}
+	if len(entries) != 0 || total != 0 {
+		t.Fatalf("expected timeout to publish no results, got len=%d total=%d", len(entries), total)
+	}
+	select {
+	case <-backend.emptyStarted:
+		t.Fatal("expected timed-out live query not to run empty-query fallback")
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

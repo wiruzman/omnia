@@ -1002,6 +1002,75 @@ func TestArrowRightStopsAsSoonAsLastColumnFits(t *testing.T) {
 	}
 }
 
+func TestRightmostScrollFillsSpaceWithPreviousColumn(t *testing.T) {
+	sys := &mockSystemAdapter{}
+	a := newTestApp(t, sys)
+	a.table.SetRect(0, 0, 80, 5)
+
+	createdAt := time.Date(2025, 9, 27, 10, 59, 45, 0, time.UTC)
+	modifiedAt := time.Date(2026, 6, 13, 14, 24, 35, 0, time.UTC)
+	seedEntries(t, a, []model.Entry{{
+		Path:       "/tmp/" + strings.Repeat("p", 90),
+		Name:       strings.Repeat("n", 40),
+		ParentPath: "/tmp",
+		RootPath:   "/tmp",
+		Type:       model.TypeFile,
+		Size:       90,
+		CreatedAt:  createdAt,
+		ModifiedAt: modifiedAt,
+	}})
+
+	handler := a.table.InputHandler()
+	for range len(tableHeaders) + 2 {
+		handler(tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModNone), func(tview.Primitive) {})
+	}
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer screen.Fini()
+	screen.SetSize(80, 5)
+	a.table.Draw(screen)
+
+	var line strings.Builder
+	firstTextX := -1
+	lastTextX := -1
+	for x := 0; x < 80; x++ {
+		mainc, _, _, _ := screen.GetContent(x, 1)
+		if mainc == 0 {
+			mainc = ' '
+		}
+		line.WriteRune(mainc)
+		if mainc != ' ' {
+			if firstTextX < 0 {
+				firstTextX = x
+			}
+			lastTextX = x
+		}
+	}
+	rendered := strings.TrimSpace(line.String())
+	if firstTextX != 0 {
+		t.Fatalf("expected rightmost scroll to fill from the left edge, got first text at x=%d", firstTextX)
+	}
+	if !strings.HasPrefix(rendered, "/tmp/") {
+		t.Fatalf("expected previous path column to fill left space, got %q", rendered)
+	}
+	wantSuffix := "file 90 B 2025-09-27 10:59:45 2026-06-13 14:24:35"
+	if !strings.HasSuffix(rendered, wantSuffix) {
+		t.Fatalf("expected row to end with %q, got %q", wantSuffix, rendered)
+	}
+	if strings.Contains(rendered, "  ") {
+		t.Fatalf("expected no empty gap inside rightmost row, got %q", rendered)
+	}
+	if lastTextX != 79 {
+		t.Fatalf("expected modified timestamp to end at x=79, got x=%d", lastTextX)
+	}
+	if mainc, _, _, _ := screen.GetContent(lastTextX, 1); mainc != '5' {
+		t.Fatalf("expected modified timestamp to end with %q, got %q", '5', mainc)
+	}
+}
+
 func TestShiftRightSelectsHeaderColumnWithoutScrolling(t *testing.T) {
 	sys := &mockSystemAdapter{}
 	a := newTestApp(t, sys)

@@ -19,6 +19,10 @@ type Config struct {
 	ScanThrottleEvery int      `json:"scan_throttle_every"`
 	ScanThrottleMs    int      `json:"scan_throttle_ms"`
 	DaemonDir         string   `json:"daemon_dir"`
+	DaemonLogFile     string   `json:"daemon_log_file"`
+	DaemonLogLevel    string   `json:"daemon_log_level"`
+	DaemonLogMaxBytes int64    `json:"daemon_log_max_bytes"`
+	DaemonLogBackups  int      `json:"daemon_log_backups"`
 	SortColumn        string   `json:"sort_column"`
 	SortDirection     string   `json:"sort_direction"`
 }
@@ -57,6 +61,10 @@ func Default() (Config, error) {
 		ScanThrottleEvery: 250,
 		ScanThrottleMs:    5,
 		DaemonDir:         "daemon",
+		DaemonLogFile:     "daemon.log",
+		DaemonLogLevel:    "info",
+		DaemonLogMaxBytes: 10 * 1024 * 1024,
+		DaemonLogBackups:  5,
 		SortColumn:        "name",
 		SortDirection:     "ASC",
 	}, nil
@@ -133,6 +141,30 @@ func normalize(cfg Config) Config {
 			cfg.DaemonDir = d.DaemonDir
 		}
 	}
+	if strings.TrimSpace(cfg.DaemonLogFile) == "" {
+		if d, err := Default(); err == nil {
+			cfg.DaemonLogFile = d.DaemonLogFile
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.DaemonLogLevel)) {
+	case "debug", "info", "warn", "warning", "error":
+		cfg.DaemonLogLevel = strings.ToLower(strings.TrimSpace(cfg.DaemonLogLevel))
+		if cfg.DaemonLogLevel == "warning" {
+			cfg.DaemonLogLevel = "warn"
+		}
+	default:
+		cfg.DaemonLogLevel = "info"
+	}
+	if cfg.DaemonLogMaxBytes <= 0 {
+		if d, err := Default(); err == nil {
+			cfg.DaemonLogMaxBytes = d.DaemonLogMaxBytes
+		}
+	}
+	if cfg.DaemonLogBackups <= 0 {
+		if d, err := Default(); err == nil {
+			cfg.DaemonLogBackups = d.DaemonLogBackups
+		}
+	}
 	if len(cfg.IncludePaths) == 0 {
 		if d, err := Default(); err == nil {
 			cfg.IncludePaths = d.IncludePaths
@@ -166,6 +198,9 @@ func normalize(cfg Config) Config {
 	if cfg.DaemonDir != "" {
 		cfg.DaemonDir = filepath.Clean(cfg.DaemonDir)
 	}
+	if cfg.DaemonLogFile != "" {
+		cfg.DaemonLogFile = filepath.Clean(cfg.DaemonLogFile)
+	}
 	switch strings.ToLower(strings.TrimSpace(cfg.SortColumn)) {
 	case "name", "path", "size", "created", "modified":
 		cfg.SortColumn = strings.ToLower(strings.TrimSpace(cfg.SortColumn))
@@ -189,12 +224,18 @@ func resolveRuntimePaths(cfg Config) Config {
 		if cfg.DaemonDir != "" && !filepath.IsAbs(cfg.DaemonDir) {
 			cfg.DaemonDir = filepath.Join(cfgDir, cfg.DaemonDir)
 		}
+		if cfg.DaemonLogFile != "" && !filepath.IsAbs(cfg.DaemonLogFile) {
+			cfg.DaemonLogFile = filepath.Join(cfg.DaemonDir, cfg.DaemonLogFile)
+		}
 	}
 	if cfg.IndexDBPath != "" {
 		cfg.IndexDBPath = filepath.Clean(cfg.IndexDBPath)
 	}
 	if cfg.DaemonDir != "" {
 		cfg.DaemonDir = filepath.Clean(cfg.DaemonDir)
+	}
+	if cfg.DaemonLogFile != "" {
+		cfg.DaemonLogFile = filepath.Clean(cfg.DaemonLogFile)
 	}
 	return cfg
 }

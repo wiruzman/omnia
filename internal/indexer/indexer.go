@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +13,7 @@ import (
 
 	"omnia-search-tui/internal/config"
 	"omnia-search-tui/internal/daemonstate"
+	"omnia-search-tui/internal/logging"
 	"omnia-search-tui/internal/model"
 	"omnia-search-tui/internal/progress"
 	"omnia-search-tui/internal/scanner"
@@ -38,14 +38,14 @@ type Indexer struct {
 	cfg      config.Config
 	scanner  *scanner.Scanner
 	store    store.Backend
-	logger   *log.Logger
+	logger   logging.PrintfLogger
 	resumeAt string
 	status   atomic.Pointer[Status]
 	mu       sync.Mutex
 	cancelFn context.CancelFunc
 }
 
-func New(cfg config.Config, scan *scanner.Scanner, st store.Backend, logger *log.Logger) *Indexer {
+func New(cfg config.Config, scan *scanner.Scanner, st store.Backend, logger logging.PrintfLogger) *Indexer {
 	initial := &Status{}
 	idx := &Indexer{cfg: cfg, scanner: scan, store: st, logger: logger, resumeAt: cfg.DaemonResumeStatePath()}
 	idx.status.Store(initial)

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"omnia-search-tui/internal/config"
+	"github.com/wiruzman/omnia/internal/config"
 )
 
 func TestOpenDaemonWritesJSONWithClassifiedLevel(t *testing.T) {

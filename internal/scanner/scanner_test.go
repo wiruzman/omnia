@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"omnia-search-tui/internal/model"
+	"github.com/wiruzman/omnia/internal/model"
 )
 
 func TestShouldExclude(t *testing.T) {

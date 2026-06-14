@@ -11,7 +11,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"omnia-search-tui/internal/model"
+	"github.com/wiruzman/omnia/internal/model"
 )
 
 func (a *App) openSelected() {

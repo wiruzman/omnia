@@ -14,16 +14,16 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"omnia-search-tui/internal/config"
-	"omnia-search-tui/internal/daemonstate"
-	"omnia-search-tui/internal/indexer"
-	"omnia-search-tui/internal/model"
-	"omnia-search-tui/internal/progress"
-	"omnia-search-tui/internal/scanner"
-	"omnia-search-tui/internal/sorter"
-	"omnia-search-tui/internal/startupcache"
-	"omnia-search-tui/internal/store"
-	tuihelp "omnia-search-tui/internal/tui"
+	"github.com/wiruzman/omnia/internal/config"
+	"github.com/wiruzman/omnia/internal/daemonstate"
+	"github.com/wiruzman/omnia/internal/indexer"
+	"github.com/wiruzman/omnia/internal/model"
+	"github.com/wiruzman/omnia/internal/progress"
+	"github.com/wiruzman/omnia/internal/scanner"
+	"github.com/wiruzman/omnia/internal/sorter"
+	"github.com/wiruzman/omnia/internal/startupcache"
+	"github.com/wiruzman/omnia/internal/store"
+	tuihelp "github.com/wiruzman/omnia/internal/tui"
 )
 
 type mockSystemAdapter struct {

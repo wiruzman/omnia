@@ -7,7 +7,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"omnia-search-tui/internal/progress"
+	"github.com/wiruzman/omnia/internal/progress"
 )
 
 func (a *App) buildProgressPage() tview.Primitive {

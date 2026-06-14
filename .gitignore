@@ -7,6 +7,11 @@
 *.swp
 *.swo
 
+# Environment files
+.env
+.env.*
+!.env.example
+
 # Go build and test output
 /omnia
 /omnia-daemon
@@ -17,6 +22,7 @@
 *.out
 coverage.out
 cover.out
+profile.out
 
 # Local configuration and runtime state
 /config.json
@@ -24,7 +30,13 @@ cover.out
 *.log
 *.pid
 
-# Local search indexes and benchmark data
+# Local search indexes, SQLite sidecars, and benchmark data
+/index.sqlite
+/index.sqlite-*
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
 /index.bleve/
 /bench-index.bleve/
 /bench-index.db

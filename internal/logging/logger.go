@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"omnia-search-tui/internal/config"
+	"github.com/wiruzman/omnia/internal/config"
 )
 
 type PrintfLogger interface {

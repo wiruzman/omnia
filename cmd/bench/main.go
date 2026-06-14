@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"omnia-search-tui/internal/model"
-	"omnia-search-tui/internal/sorter"
-	"omnia-search-tui/internal/store"
+	"github.com/wiruzman/omnia/internal/model"
+	"github.com/wiruzman/omnia/internal/sorter"
+	"github.com/wiruzman/omnia/internal/store"
 )
 
 type benchConfig struct {

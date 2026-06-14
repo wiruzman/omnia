@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"omnia-search-tui/internal/model"
-	"omnia-search-tui/internal/sorter"
+	"github.com/wiruzman/omnia/internal/model"
+	"github.com/wiruzman/omnia/internal/sorter"
 )
 
 func TestSQLiteQueryShortPlainTermSkipsPathContains(t *testing.T) {

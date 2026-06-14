@@ -6,8 +6,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"omnia-search-tui/internal/model"
-	"omnia-search-tui/internal/sorter"
+	"github.com/wiruzman/omnia/internal/model"
+	"github.com/wiruzman/omnia/internal/sorter"
 )
 
 var tableHeaders = [...]string{"Name", "Path", "Type", "Size", "Created", "Modified"}

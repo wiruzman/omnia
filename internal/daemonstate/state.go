@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"omnia-search-tui/internal/progress"
+	"github.com/wiruzman/omnia/internal/progress"
 )
 
 type Status struct {

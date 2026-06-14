@@ -1,4 +1,4 @@
-module omnia-search-tui
+module github.com/wiruzman/omnia
 
 go 1.25.0
 

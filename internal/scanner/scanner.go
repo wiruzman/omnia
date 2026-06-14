@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"omnia-search-tui/internal/model"
+	"github.com/wiruzman/omnia/internal/model"
 )
 
 type Progress struct {

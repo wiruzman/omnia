@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"omnia-search-tui/internal/config"
-	"omnia-search-tui/internal/scanner"
-	"omnia-search-tui/internal/sorter"
-	"omnia-search-tui/internal/startupcache"
-	"omnia-search-tui/internal/store"
+	"github.com/wiruzman/omnia/internal/config"
+	"github.com/wiruzman/omnia/internal/scanner"
+	"github.com/wiruzman/omnia/internal/sorter"
+	"github.com/wiruzman/omnia/internal/startupcache"
+	"github.com/wiruzman/omnia/internal/store"
 )
 
 func TestStartReindexWritesSortedStartupCacheFromScan(t *testing.T) {

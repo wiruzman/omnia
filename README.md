@@ -35,6 +35,13 @@ go build -o omnia ./cmd/omnia
 go build -o omnia-daemon ./cmd/omnia-daemon
 ```
 
+## Install from source
+
+```bash
+go install github.com/wiruzman/omnia/cmd/omnia@latest
+go install github.com/wiruzman/omnia/cmd/omnia-daemon@latest
+```
+
 ## Run
 
 Start the daemon first:
@@ -145,6 +152,14 @@ go run ./cmd/bench -n 200000 -runs 20 -batch 2000 -limit 100
 ```bash
 go test ./...
 ```
+
+## Contributing and security
+
+Issues and pull requests are welcome. See CONTRIBUTING.md for local checks and SECURITY.md for vulnerability reporting guidance.
+
+## License
+
+No license has been selected yet. Add a LICENSE file before publishing terms for reuse or accepting outside contributions.
 
 ## Limitations
 

@@ -15,13 +15,13 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"omnia-search-tui/internal/config"
-	"omnia-search-tui/internal/indexer"
-	"omnia-search-tui/internal/model"
-	"omnia-search-tui/internal/scanner"
-	"omnia-search-tui/internal/sorter"
-	"omnia-search-tui/internal/startupcache"
-	"omnia-search-tui/internal/store"
+	"github.com/wiruzman/omnia/internal/config"
+	"github.com/wiruzman/omnia/internal/indexer"
+	"github.com/wiruzman/omnia/internal/model"
+	"github.com/wiruzman/omnia/internal/scanner"
+	"github.com/wiruzman/omnia/internal/sorter"
+	"github.com/wiruzman/omnia/internal/startupcache"
+	"github.com/wiruzman/omnia/internal/store"
 )
 
 type meteredBackend struct {

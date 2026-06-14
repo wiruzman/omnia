@@ -7,8 +7,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"omnia-search-tui/internal/daemonstate"
-	tuihelp "omnia-search-tui/internal/tui"
+	"github.com/wiruzman/omnia/internal/daemonstate"
+	tuihelp "github.com/wiruzman/omnia/internal/tui"
 )
 
 const searchBoxCollapsedHeight = 3

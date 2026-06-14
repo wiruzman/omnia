@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"omnia-search-tui/internal/daemon"
+	"github.com/wiruzman/omnia/internal/daemon"
 )
 
 func main() {

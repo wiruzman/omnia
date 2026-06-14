@@ -11,15 +11,15 @@ import (
 
 	"github.com/rjeczalik/notify"
 
-	"omnia-search-tui/internal/config"
-	"omnia-search-tui/internal/daemonstate"
-	"omnia-search-tui/internal/indexer"
-	"omnia-search-tui/internal/logging"
-	"omnia-search-tui/internal/progress"
-	"omnia-search-tui/internal/scanner"
-	"omnia-search-tui/internal/sorter"
-	"omnia-search-tui/internal/startupcache"
-	"omnia-search-tui/internal/store"
+	"github.com/wiruzman/omnia/internal/config"
+	"github.com/wiruzman/omnia/internal/daemonstate"
+	"github.com/wiruzman/omnia/internal/indexer"
+	"github.com/wiruzman/omnia/internal/logging"
+	"github.com/wiruzman/omnia/internal/progress"
+	"github.com/wiruzman/omnia/internal/scanner"
+	"github.com/wiruzman/omnia/internal/sorter"
+	"github.com/wiruzman/omnia/internal/startupcache"
+	"github.com/wiruzman/omnia/internal/store"
 )
 
 type Service struct {

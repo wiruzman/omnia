@@ -1,6 +1,6 @@
 package app
 
-import "omnia-search-tui/internal/macos"
+import "github.com/wiruzman/omnia/internal/macos"
 
 type SystemAdapter interface {
 	OpenPath(path string) error

@@ -4,8 +4,8 @@ import (
 	gosort "sort"
 	"strings"
 
-	"omnia-search-tui/internal/model"
-	"omnia-search-tui/internal/sorter"
+	"github.com/wiruzman/omnia/internal/model"
+	"github.com/wiruzman/omnia/internal/sorter"
 )
 
 type QueryResult struct {

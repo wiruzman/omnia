@@ -3,8 +3,8 @@ package store
 import (
 	"context"
 
-	"omnia-search-tui/internal/model"
-	"omnia-search-tui/internal/sorter"
+	"github.com/wiruzman/omnia/internal/model"
+	"github.com/wiruzman/omnia/internal/sorter"
 )
 
 // Backend is the minimal storage/search contract used by app, daemon and indexer.

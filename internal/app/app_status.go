@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"omnia-search-tui/internal/config"
-	"omnia-search-tui/internal/daemonstate"
-	"omnia-search-tui/internal/indexer"
+	"github.com/wiruzman/omnia/internal/config"
+	"github.com/wiruzman/omnia/internal/daemonstate"
+	"github.com/wiruzman/omnia/internal/indexer"
 )
 
 const snapshotRefreshRetryInterval = 6 * time.Second

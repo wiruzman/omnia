@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a reproducible problem in Omnia.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include commands, configuration shape, and the observed result.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include macOS version, Go version, and terminal emulator.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Remove private paths or sensitive data before posting logs.
+      render: text

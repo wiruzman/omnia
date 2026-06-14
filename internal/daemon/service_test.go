@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"omnia-search-tui/internal/config"
-	"omnia-search-tui/internal/daemonstate"
-	"omnia-search-tui/internal/model"
-	"omnia-search-tui/internal/progress"
-	"omnia-search-tui/internal/sorter"
-	"omnia-search-tui/internal/startupcache"
-	"omnia-search-tui/internal/store"
+	"github.com/wiruzman/omnia/internal/config"
+	"github.com/wiruzman/omnia/internal/daemonstate"
+	"github.com/wiruzman/omnia/internal/model"
+	"github.com/wiruzman/omnia/internal/progress"
+	"github.com/wiruzman/omnia/internal/sorter"
+	"github.com/wiruzman/omnia/internal/startupcache"
+	"github.com/wiruzman/omnia/internal/store"
 )
 
 func TestRootForPathPrefersMostSpecificRoot(t *testing.T) {

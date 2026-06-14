@@ -8,9 +8,15 @@ import (
 	"syscall"
 
 	"github.com/wiruzman/omnia/internal/daemon"
+	"github.com/wiruzman/omnia/internal/version"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Printf("omnia-daemon %s\n", version.Version)
+		return
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 

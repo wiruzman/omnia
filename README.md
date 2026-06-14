@@ -56,6 +56,13 @@ Then run the TUI in another terminal:
 ./omnia
 ```
 
+Check installed versions:
+
+```bash
+omnia --version
+omnia-daemon --version
+```
+
 ## First-run paths
 
 On first launch, Omnia creates default configuration under:

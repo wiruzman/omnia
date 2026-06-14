@@ -2,13 +2,17 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	"omnia-search-tui/internal/daemonstate"
+	tuihelp "omnia-search-tui/internal/tui"
 )
+
+const searchBoxCollapsedHeight = 3
 
 func (a *App) requestReindexControl(freshStart bool) {
 	running := a.currentIndexerStatus().Running
@@ -50,6 +54,8 @@ func (a *App) buildUI() {
 	tview.Styles.PrimitiveBackgroundColor = tcell.ColorDefault
 	tview.Styles.ContrastBackgroundColor = tcell.ColorDefault
 	tview.Styles.MoreContrastBackgroundColor = tcell.ColorDefault
+
+	a.tui.SetInputCapture(a.captureGlobalKeys)
 
 	a.input = tview.NewInputField().
 		SetLabel("Search: ").
@@ -119,11 +125,19 @@ func (a *App) buildUI() {
 		return event
 	})
 
+	a.shortcutHelp = tview.NewTextView().
+		SetText(shortcutHelpText(tuihelp.ShortcutHelp)).
+		SetTextColor(tcell.ColorGray).
+		SetWrap(false).
+		SetScrollable(false)
+	a.shortcutHelp.SetBackgroundColor(tcell.ColorDefault)
+
 	searchBox := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.input, 1, 0, false)
 	searchBox.SetBorder(true)
 	searchBox.SetTitle(" Search ")
 	searchBox.SetBackgroundColor(tcell.ColorDefault)
+	a.searchBox = searchBox
 
 	resultsBox := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.table, 0, 1, true)
@@ -132,7 +146,8 @@ func (a *App) buildUI() {
 	resultsBox.SetBackgroundColor(tcell.ColorDefault)
 
 	a.layout = tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(searchBox, 3, 0, false).
+		AddItem(a.shortcutHelp, 0, 0, false).
+		AddItem(searchBox, searchBoxCollapsedHeight, 0, false).
 		AddItem(resultsBox, 0, 1, true).
 		AddItem(a.status, 1, 0, false)
 	a.layout.SetBackgroundColor(tcell.ColorDefault)
@@ -146,6 +161,70 @@ func (a *App) buildUI() {
 	a.renderHeader(a.visibleColumnLayouts())
 	a.updateStatus()
 	a.renderProgressTable()
+}
+
+func (a *App) captureGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
+	if isShortcutHelpToggle(event) {
+		a.toggleShortcutHelp()
+		return nil
+	}
+	return event
+}
+
+func isShortcutHelpToggle(event *tcell.EventKey) bool {
+	if event.Key() != tcell.KeyRune {
+		return false
+	}
+	return event.Rune() == '?'
+}
+
+func (a *App) toggleShortcutHelp() {
+	a.setShortcutHelpVisible(!a.shortcutHelpVisible)
+}
+
+func (a *App) setShortcutHelpVisible(visible bool) {
+	a.shortcutHelpVisible = visible
+	if a.searchBox == nil || a.shortcutHelp == nil || a.layout == nil {
+		return
+	}
+
+	helpHeight := 0
+	if visible {
+		helpHeight = shortcutHelpHeight(tuihelp.ShortcutHelp)
+	}
+	a.layout.ResizeItem(a.shortcutHelp, helpHeight, 0)
+}
+
+func shortcutHelpHeight(shortcuts []string) int {
+	return (len(shortcuts) + 1) / 2
+}
+
+func shortcutHelpText(shortcuts []string) string {
+	rows := shortcutHelpHeight(shortcuts)
+	if rows == 0 {
+		return ""
+	}
+
+	leftWidth := 0
+	for i := range rows {
+		if width := len(shortcuts[i]); width > leftWidth {
+			leftWidth = width
+		}
+	}
+
+	var b strings.Builder
+	for i := range rows {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		right := i + rows
+		if right < len(shortcuts) {
+			fmt.Fprintf(&b, "%-*s  %s", leftWidth, shortcuts[i], shortcuts[right])
+			continue
+		}
+		b.WriteString(shortcuts[i])
+	}
+	return b.String()
 }
 
 func (a *App) forwardNavigationToResults(event *tcell.EventKey) {

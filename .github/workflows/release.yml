@@ -195,6 +195,7 @@ jobs:
           tap_dir="${RUNNER_TEMP}/homebrew-tap"
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "${tap_dir}"
           cd "${tap_dir}"
+          git push --dry-run origin HEAD:main
 
           VERSION="${VERSION}" ARCHIVE_SHA256="${ARCHIVE_SHA256}" ruby -0pi -e '
             version = ENV.fetch("VERSION")

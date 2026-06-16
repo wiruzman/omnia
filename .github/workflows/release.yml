@@ -1,0 +1,220 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version tag, for example v0.0.3"
+        required: true
+        type: string
+      summary:
+        description: "One-sentence release summary"
+        required: true
+        type: string
+      highlights:
+        description: "Optional Markdown bullets. If omitted, commit subjects since the previous tag are used."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create release and update Homebrew tap
+    runs-on: macos-latest
+    env:
+      CGO_ENABLED: "1"
+      TAP_REPO: "wiruzman/homebrew-tap"
+      VERSION: ${{ inputs.version }}
+      SUMMARY: ${{ inputs.summary }}
+      HIGHLIGHTS: ${{ inputs.highlights }}
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          case "${VERSION}" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "::error::version must look like vX.Y.Z, got ${VERSION}"
+              exit 1
+              ;;
+          esac
+
+          if [ "${GITHUB_REF_NAME}" != "master" ]; then
+            echo "::error::run releases from master, got ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+          if [ -z "${TAP_TOKEN}" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN must be configured with contents:write access to ${TAP_REPO}"
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build commands
+        run: |
+          go build -o "${RUNNER_TEMP}/omnia" ./cmd/omnia
+          go build -o "${RUNNER_TEMP}/omnia-daemon" ./cmd/omnia-daemon
+          go build -o "${RUNNER_TEMP}/omnia-bench" ./cmd/bench
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create or verify tag
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+
+          if git rev-parse --verify --quiet "refs/tags/${VERSION}" >/dev/null; then
+            tag_commit="$(git rev-list -n 1 "${VERSION}")"
+            head_commit="$(git rev-parse HEAD)"
+            if [ "${tag_commit}" != "${head_commit}" ]; then
+              echo "::error::${VERSION} already exists at ${tag_commit}, not HEAD ${head_commit}"
+              exit 1
+            fi
+            echo "Tag ${VERSION} already points at HEAD; reusing it."
+          else
+            git tag -a "${VERSION}" -m "Release ${VERSION}"
+            git push origin "${VERSION}"
+          fi
+
+      - name: Build source archive
+        run: |
+          set -euo pipefail
+          archive_version="${VERSION#v}"
+          archive="${RUNNER_TEMP}/omnia-${VERSION}.tar.gz"
+          git archive \
+            --format=tar.gz \
+            --prefix="omnia-${archive_version}/" \
+            -o "${archive}" \
+            "${VERSION}"
+          archive_sha256="$(shasum -a 256 "${archive}" | awk '{print $1}')"
+          tar -tzf "${archive}" | head
+          echo "ARCHIVE=${archive}" >> "${GITHUB_ENV}"
+          echo "ARCHIVE_SHA256=${archive_sha256}" >> "${GITHUB_ENV}"
+
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          previous_tag="$(git describe --tags --abbrev=0 "${VERSION}^" 2>/dev/null || true)"
+          {
+            echo "# Omnia ${VERSION}"
+            echo
+            echo "${SUMMARY}"
+            echo
+            echo "## Highlights"
+            echo
+            if [ -n "${HIGHLIGHTS}" ]; then
+              printf '%s\n' "${HIGHLIGHTS}"
+            elif [ -n "${previous_tag}" ]; then
+              git log --pretty='- %s (%h)' "${previous_tag}..${VERSION}"
+            else
+              git log --pretty='- %s (%h)' "${VERSION}"
+            fi
+            echo
+            echo "## Install From Source"
+            echo
+            echo '```bash'
+            echo "go install github.com/wiruzman/omnia/cmd/omnia@${VERSION}"
+            echo "go install github.com/wiruzman/omnia/cmd/omnia-daemon@${VERSION}"
+            echo '```'
+            echo
+            echo "## Homebrew Tap"
+            echo
+            echo '```bash'
+            echo "brew tap wiruzman/tap"
+            echo "brew install omnia"
+            echo '```'
+            echo
+            echo "Start the daemon with:"
+            echo
+            echo '```bash'
+            echo "brew services start wiruzman/tap/omnia"
+            echo '```'
+            echo
+            echo "Stop it with:"
+            echo
+            echo '```bash'
+            echo "brew services stop wiruzman/tap/omnia"
+            echo '```'
+            echo
+            echo "## Notes"
+            echo
+            echo "- Requires macOS and Go 1.25+ when building from source."
+            echo "- The source archive SHA-256 is \`${ARCHIVE_SHA256}\`."
+          } > "${RUNNER_TEMP}/release-notes.md"
+          cat "${RUNNER_TEMP}/release-notes.md"
+          echo "RELEASE_NOTES=${RUNNER_TEMP}/release-notes.md" >> "${GITHUB_ENV}"
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release edit "${VERSION}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "Omnia ${VERSION}" \
+              --notes-file "${RELEASE_NOTES}"
+            gh release upload "${VERSION}" "${ARCHIVE}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+          else
+            gh release create "${VERSION}" "${ARCHIVE}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "Omnia ${VERSION}" \
+              --notes-file "${RELEASE_NOTES}"
+          fi
+
+      - name: Update Homebrew tap
+        run: |
+          set -euo pipefail
+          tap_dir="${RUNNER_TEMP}/homebrew-tap"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "${tap_dir}"
+          cd "${tap_dir}"
+
+          VERSION="${VERSION}" ARCHIVE_SHA256="${ARCHIVE_SHA256}" ruby -0pi -e '
+            version = ENV.fetch("VERSION")
+            sha = ENV.fetch("ARCHIVE_SHA256")
+            gsub(%r{url "https://github\.com/wiruzman/omnia/releases/download/v[^"]+/omnia-v[^"]+\.tar\.gz"},
+                 "url \"https://github.com/wiruzman/omnia/releases/download/#{version}/omnia-#{version}.tar.gz\"")
+            gsub(/sha256 "[0-9a-f]{64}"/, "sha256 \"#{sha}\"")
+          ' Formula/omnia.rb
+
+          brew style Formula/omnia.rb
+          curl -L --fail -o "${RUNNER_TEMP}/tap-check-${VERSION}.tar.gz" \
+            "https://github.com/wiruzman/omnia/releases/download/${VERSION}/omnia-${VERSION}.tar.gz"
+          echo "${ARCHIVE_SHA256}  ${RUNNER_TEMP}/tap-check-${VERSION}.tar.gz" | shasum -a 256 -c -
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- Formula/omnia.rb; then
+            echo "Homebrew tap already points at ${VERSION}."
+          else
+            git add Formula/omnia.rb
+            git commit -m "Update omnia to ${VERSION}"
+            git push origin main
+          fi

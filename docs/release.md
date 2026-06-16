@@ -1,7 +1,39 @@
 # Release Runbook
 
-Use this checklist for every public release so the GitHub release, tag, and
-source archive stay consistent.
+Use this checklist for every public release so the GitHub release, tag, source
+archive, and Homebrew formula stay consistent.
+
+## Automated Release
+
+The normal release path is the `Release` GitHub Actions workflow. It creates or
+verifies the tag, runs checks, builds the source archive, creates or updates the
+GitHub release, uploads `omnia-vX.Y.Z.tar.gz`, and updates
+`wiruzman/homebrew-tap`.
+
+Required repository secret:
+
+- `HOMEBREW_TAP_TOKEN`: a GitHub token with `contents:write` access to
+  `wiruzman/homebrew-tap`.
+
+To publish a release:
+
+1. Go to GitHub Actions -> `Release` -> `Run workflow`.
+2. Select branch `master`.
+3. Enter `version`, for example `v0.0.3`.
+4. Enter a one-sentence `summary`.
+5. Optionally enter Markdown `highlights`. If omitted, the workflow uses commit
+   subjects since the previous tag.
+6. Run the workflow and wait for it to complete.
+
+After it completes:
+
+```bash
+brew update
+brew info wiruzman/tap/omnia
+brew outdated wiruzman/tap/omnia
+```
+
+Use the local steps below only as a manual fallback.
 
 ## Naming
 

@@ -163,6 +163,140 @@ func TestSQLiteStoreUpsertRefreshesFTSAndDeletePathPrefix(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreUpsertEntryIfChangedSkipsIdenticalEntry(t *testing.T) {
+	ctx := context.Background()
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Unix(1714000000, 0)
+	entry := model.Entry{
+		Path:       "/tmp/dir/file.txt",
+		Name:       "same.txt",
+		ParentPath: "/tmp/dir",
+		RootPath:   "/tmp",
+		Type:       model.TypeFile,
+		Size:       10,
+		CreatedAt:  now,
+		ModifiedAt: now,
+	}
+
+	result, err := st.UpsertEntryIfChanged(ctx, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || !result.Inserted {
+		t.Fatal("expected first upsert to insert entry")
+	}
+
+	result, err = st.UpsertEntryIfChanged(ctx, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed || result.Inserted {
+		t.Fatal("expected identical upsert to be skipped")
+	}
+
+	entry.Name = "changed.txt"
+	result, err = st.UpsertEntryIfChanged(ctx, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || result.Inserted {
+		t.Fatal("expected changed entry to be updated")
+	}
+
+	oldRes, err := st.Query(ctx, "same", sorter.SortSpec{Column: sorter.SortName, Direction: sorter.Asc}, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(oldRes.Entries) != 0 {
+		t.Fatalf("expected old FTS row to be removed, got %+v", oldRes.Entries)
+	}
+	newRes, err := st.Query(ctx, "changed", sorter.SortSpec{Column: sorter.SortName, Direction: sorter.Asc}, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(newRes.Entries) != 1 {
+		t.Fatalf("expected updated FTS row, got %+v", newRes.Entries)
+	}
+}
+
+func TestSQLiteStoreHasEntriesUsesLimitedProbe(t *testing.T) {
+	ctx := context.Background()
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	hasEntries, err := st.HasEntries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasEntries {
+		t.Fatal("expected empty store to report no entries")
+	}
+
+	now := time.Now()
+	if err := st.UpsertEntry(ctx, model.Entry{
+		Path:       "/tmp/a.txt",
+		Name:       "a.txt",
+		ParentPath: "/tmp",
+		RootPath:   "/tmp",
+		Type:       model.TypeFile,
+		Size:       1,
+		CreatedAt:  now,
+		ModifiedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	hasEntries, err = st.HasEntries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasEntries {
+		t.Fatal("expected non-empty store to report entries")
+	}
+}
+
+func TestSQLiteStoreDeletePathPrefixCountReportsActualDeletes(t *testing.T) {
+	ctx := context.Background()
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Now()
+	if err := st.UpsertBatch(ctx, now.UnixMicro(), []model.Entry{
+		{Path: "/tmp/dir/a.txt", Name: "a.txt", ParentPath: "/tmp/dir", RootPath: "/tmp", Type: model.TypeFile, Size: 1, CreatedAt: now, ModifiedAt: now},
+		{Path: "/tmp/dir/nested/b.txt", Name: "b.txt", ParentPath: "/tmp/dir/nested", RootPath: "/tmp", Type: model.TypeFile, Size: 1, CreatedAt: now, ModifiedAt: now},
+		{Path: "/tmp/other.txt", Name: "other.txt", ParentPath: "/tmp", RootPath: "/tmp", Type: model.TypeFile, Size: 1, CreatedAt: now, ModifiedAt: now},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := st.DeletePathPrefixCount(ctx, "/tmp/dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 2 {
+		t.Fatalf("expected 2 deleted rows, got %d", deleted)
+	}
+
+	deleted, err = st.DeletePathPrefixCount(ctx, "/tmp/dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 0 {
+		t.Fatalf("expected no-op delete to report 0 rows, got %d", deleted)
+	}
+}
+
 func TestSQLiteEmptyQueryReturnsVisibleTotalWithoutFullCount(t *testing.T) {
 	ctx := context.Background()
 	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))

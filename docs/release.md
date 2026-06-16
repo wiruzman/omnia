@@ -125,12 +125,56 @@ Upload the archive after the GitHub release exists:
 gh release upload "$VERSION" "/tmp/omnia-${VERSION}.tar.gz" --repo wiruzman/omnia
 ```
 
+## Update The Homebrew Tap
+
+Update `wiruzman/homebrew-tap` after the release archive is uploaded:
+
+```bash
+VERSION=vX.Y.Z
+ARCHIVE_SHA256=<sha256 from shasum>
+git clone https://github.com/wiruzman/homebrew-tap.git /tmp/homebrew-tap
+cd /tmp/homebrew-tap
+```
+
+Edit `Formula/omnia.rb`:
+
+```ruby
+url "https://github.com/wiruzman/omnia/releases/download/vX.Y.Z/omnia-vX.Y.Z.tar.gz"
+sha256 "<sha256 from shasum>"
+```
+
+Verify the formula:
+
+```bash
+brew style Formula/omnia.rb
+curl -L --fail -o "/tmp/omnia-${VERSION}.tar.gz" \
+  "https://github.com/wiruzman/omnia/releases/download/${VERSION}/omnia-${VERSION}.tar.gz"
+shasum -a 256 "/tmp/omnia-${VERSION}.tar.gz"
+```
+
+Commit and push the tap:
+
+```bash
+git add Formula/omnia.rb
+git commit -m "Update omnia to ${VERSION}"
+git push origin main
+```
+
+After pushing, verify Homebrew sees the new version:
+
+```bash
+brew update
+brew info wiruzman/tap/omnia
+brew outdated wiruzman/tap/omnia
+```
+
 ## Post-Release Checks
 
 1. Verify the GitHub release has the `omnia-vX.Y.Z.tar.gz` asset.
 2. Verify the archive SHA-256 is shown in the release asset metadata.
-3. Check CI on `origin/master`.
-4. Check the release page:
+3. Verify `wiruzman/tap/omnia` reports the new stable version.
+4. Check CI on `origin/master`.
+5. Check the release page:
 
 ```bash
 gh release view "$VERSION" --repo wiruzman/omnia --json tagName,name,assets,url

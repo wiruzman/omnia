@@ -87,6 +87,7 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 		walkOptions := scanner.WalkOptions{
 			ThrottleEvery: i.cfg.ScanThrottleEvery,
 			ThrottleDelay: time.Duration(i.cfg.ScanThrottleMs) * time.Millisecond,
+			SkipPath:      i.cfg.IsRuntimePath,
 		}
 		resume, err := daemonstate.ReadResumeState(i.resumeAt)
 		if err == nil && resume.ScanID > 0 {

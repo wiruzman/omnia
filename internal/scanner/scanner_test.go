@@ -105,6 +105,43 @@ func TestWalkWithOptionsResumesFromRootAndPath(t *testing.T) {
 	}
 }
 
+func TestWalkWithOptionsSkipsPathBeforeEmit(t *testing.T) {
+	tmp := t.TempDir()
+	runtimeDir := filepath.Join(tmp, ".config", "omnia-search", "daemon")
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeDir, "status.json"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "notes.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(nil)
+	var paths []string
+	err := s.WalkWithOptions([]string{tmp}, func(e model.Entry) error {
+		paths = append(paths, e.Path)
+		return nil
+	}, nil, func(error) {}, WalkOptions{
+		SkipPath: func(path string) bool {
+			return path == runtimeDir
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range paths {
+		if path == runtimeDir || filepath.Dir(path) == runtimeDir {
+			t.Fatalf("runtime path was emitted: %q", path)
+		}
+	}
+	if len(paths) == 0 {
+		t.Fatal("expected non-runtime paths to be emitted")
+	}
+}
+
 func TestWalkWithOptionsThrottlesAtConfiguredInterval(t *testing.T) {
 	tmp := t.TempDir()
 	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {

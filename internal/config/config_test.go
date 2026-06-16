@@ -134,3 +134,39 @@ func TestNormalizeDefaultsIndexPath(t *testing.T) {
 		t.Fatalf("expected default index path, got %q", cfg.IndexDBPath)
 	}
 }
+
+func TestIsRuntimePathMatchesDaemonStateIndexSidecarsAndLogs(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "omnia-search")
+	cfg := Config{
+		IndexDBPath:   filepath.Join(base, "index.sqlite"),
+		DaemonDir:     filepath.Join(base, "daemon"),
+		DaemonLogFile: filepath.Join(base, "logs", "daemon.log"),
+	}
+
+	cases := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "daemon dir", path: cfg.DaemonDir, want: true},
+		{name: "daemon child", path: filepath.Join(cfg.DaemonDir, "status.json"), want: true},
+		{name: "index db", path: cfg.IndexDBPath, want: true},
+		{name: "index wal", path: cfg.IndexDBPath + "-wal", want: true},
+		{name: "index shm", path: cfg.IndexDBPath + "-shm", want: true},
+		{name: "index journal", path: cfg.IndexDBPath + "-journal", want: true},
+		{name: "daemon log", path: cfg.DaemonLogFile, want: true},
+		{name: "daemon log backup", path: cfg.DaemonLogFile + ".2", want: true},
+		{name: "similarly prefixed db", path: cfg.IndexDBPath + ".backup", want: false},
+		{name: "similarly prefixed daemon dir", path: cfg.DaemonDir + "-old", want: false},
+		{name: "regular file", path: filepath.Join(base, "Documents", "notes.txt"), want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cfg.IsRuntimePath(tc.path)
+			if got != tc.want {
+				t.Fatalf("IsRuntimePath(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}

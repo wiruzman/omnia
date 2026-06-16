@@ -419,13 +419,7 @@ func pathProgressEqual(a, b []progress.PathProgress) bool {
 }
 
 func (s *Service) isDaemonManagedPath(path string) bool {
-	cleanPath := filepath.Clean(path)
-	daemonDir := filepath.Clean(s.cfg.DaemonDir)
-	if cleanPath == daemonDir {
-		return true
-	}
-	prefix := daemonDir + string(os.PathSeparator)
-	return strings.HasPrefix(cleanPath, prefix)
+	return s.cfg.IsRuntimePath(path)
 }
 
 func rootForPath(roots []string, path string) string {

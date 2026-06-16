@@ -29,6 +29,7 @@ type WalkOptions struct {
 	ResumeAfterPath string
 	ThrottleEvery   int
 	ThrottleDelay   time.Duration
+	SkipPath        func(string) bool
 	throttleSleep   func(time.Duration)
 }
 
@@ -103,18 +104,19 @@ func (s *Scanner) WalkWithOptions(roots []string, emit func(model.Entry) error, 
 				onWarn(fmt.Errorf("walk error %s: %w", path, err))
 				return nil
 			}
-			if s.ShouldExclude(path) {
+			abs, err := filepath.Abs(path)
+			if err != nil {
+				onWarn(fmt.Errorf("abs path error %s: %w", path, err))
+				return nil
+			}
+
+			if s.ShouldExclude(abs) || (options.SkipPath != nil && options.SkipPath(abs)) {
 				if d.IsDir() {
 					return fs.SkipDir
 				}
 				return nil
 			}
 
-			abs, err := filepath.Abs(path)
-			if err != nil {
-				onWarn(fmt.Errorf("abs path error %s: %w", path, err))
-				return nil
-			}
 			if currentResumeAfter != "" && abs <= currentResumeAfter {
 				if d.IsDir() {
 					cursorPrefix := currentResumeAfter + string(os.PathSeparator)

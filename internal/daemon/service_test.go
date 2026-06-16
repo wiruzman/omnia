@@ -28,7 +28,13 @@ func TestRootForPathPrefersMostSpecificRoot(t *testing.T) {
 
 func TestIsDaemonManagedPath(t *testing.T) {
 	daemonDir := filepath.Clean("/Users/demo/.config/omnia-search/daemon")
-	svc := &Service{cfg: config.Config{DaemonDir: daemonDir}}
+	indexDBPath := filepath.Clean("/Users/demo/.config/omnia-search/index.sqlite")
+	logPath := filepath.Clean("/Users/demo/Library/Logs/omnia-daemon.log")
+	svc := &Service{cfg: config.Config{
+		DaemonDir:     daemonDir,
+		IndexDBPath:   indexDBPath,
+		DaemonLogFile: logPath,
+	}}
 
 	cases := []struct {
 		name string
@@ -38,6 +44,12 @@ func TestIsDaemonManagedPath(t *testing.T) {
 		{name: "daemon directory", path: daemonDir, want: true},
 		{name: "daemon status file", path: filepath.Join(daemonDir, "status.json"), want: true},
 		{name: "daemon subdir file", path: filepath.Join(daemonDir, "nested", "file.tmp"), want: true},
+		{name: "index db", path: indexDBPath, want: true},
+		{name: "index db wal", path: indexDBPath + "-wal", want: true},
+		{name: "index db shm", path: indexDBPath + "-shm", want: true},
+		{name: "index db similarly prefixed file", path: indexDBPath + ".backup", want: false},
+		{name: "external daemon log", path: logPath, want: true},
+		{name: "external daemon log backup", path: logPath + ".1", want: true},
 		{name: "outside daemon directory", path: "/Users/demo/Documents/file.txt", want: false},
 	}
 

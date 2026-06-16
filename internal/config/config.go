@@ -267,3 +267,49 @@ func (c Config) DaemonFreshStartPath() string {
 func (c Config) DaemonResumeStatePath() string {
 	return filepath.Join(c.DaemonDir, "reindex.resume.json")
 }
+
+func (c Config) IsRuntimePath(path string) bool {
+	cleanPath := filepath.Clean(path)
+	if pathEqualOrUnder(cleanPath, c.DaemonDir) {
+		return true
+	}
+	if isSQLiteRuntimePath(cleanPath, c.IndexDBPath) {
+		return true
+	}
+	return isRotatedLogPath(cleanPath, c.DaemonLogFile)
+}
+
+func pathEqualOrUnder(path, parent string) bool {
+	parent = strings.TrimSpace(parent)
+	if parent == "" {
+		return false
+	}
+	cleanParent := filepath.Clean(parent)
+	return path == cleanParent || strings.HasPrefix(path, cleanParent+string(os.PathSeparator))
+}
+
+func isSQLiteRuntimePath(path, dbPath string) bool {
+	dbPath = strings.TrimSpace(dbPath)
+	if dbPath == "" {
+		return false
+	}
+	cleanDBPath := filepath.Clean(dbPath)
+	if path == cleanDBPath {
+		return true
+	}
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if path == cleanDBPath+suffix {
+			return true
+		}
+	}
+	return false
+}
+
+func isRotatedLogPath(path, logPath string) bool {
+	logPath = strings.TrimSpace(logPath)
+	if logPath == "" {
+		return false
+	}
+	cleanLogPath := filepath.Clean(logPath)
+	return path == cleanLogPath || strings.HasPrefix(path, cleanLogPath+".")
+}

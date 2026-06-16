@@ -138,8 +138,8 @@ func TestStatusEqualDetectsPathProgressChanges(t *testing.T) {
 
 func TestShouldRefreshIndexedTotal(t *testing.T) {
 	now := time.Unix(1714000000, 0)
-	ready := now.Add(-6 * time.Second)
-	notReady := now.Add(-2 * time.Second)
+	ready := now.Add(-indexedTotalRefreshInterval - time.Second)
+	notReady := now.Add(-indexedTotalRefreshInterval + time.Second)
 
 	cases := []struct {
 		name           string

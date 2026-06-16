@@ -34,6 +34,7 @@ const watchEventMask = notify.Create | notify.Write | notify.Remove | notify.Ren
 
 const statusHeartbeatInterval = 15 * time.Second
 const incrementalFlushDebounce = 900 * time.Millisecond
+const indexedTotalRefreshInterval = time.Minute
 
 func New(cfg config.Config, logger logging.PrintfLogger) (*Service, error) {
 	st, err := store.OpenSQLite(cfg.IndexDBPath)
@@ -274,7 +275,7 @@ func (s *Service) startReindexFromScratch(ctx context.Context, reason string) er
 }
 
 func shouldRefreshIndexedTotal(indexingRunning bool, needsRecount bool, lastCountAt time.Time, now time.Time) bool {
-	if now.Sub(lastCountAt) < 5*time.Second {
+	if now.Sub(lastCountAt) < indexedTotalRefreshInterval {
 		return false
 	}
 	return !indexingRunning && needsRecount

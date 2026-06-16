@@ -83,7 +83,7 @@ func (s *SQLiteStore) UpsertBatch(ctx context.Context, scanID int64, batch []mod
 		return err
 	}
 
-	lookupStmt, err := s.db.Prepare("SELECT rowid FROM entries WHERE path = ?;")
+	lookupStmt, err := s.db.Prepare("SELECT rowid, path_lower, name_lower FROM entries WHERE path = ?;")
 	if err != nil {
 		return err
 	}
@@ -136,22 +136,31 @@ func (s *SQLiteStore) UpsertBatch(ctx context.Context, scanID int64, batch []mod
 				return err
 			}
 
-			rowID, exists, err := lookupRowID(lookupStmt, entry.Path)
+			existing, exists, err := lookupIndexedEntry(lookupStmt, entry.Path)
 			if err != nil {
 				return err
 			}
 
 			if exists {
-				if err := deleteFTSRows(deleteNameStmt, deletePathStmt, rowID); err != nil {
-					return err
+				refreshFTS := existing.needsFTSRefresh(entry)
+				if refreshFTS {
+					if err := deleteFTSRows(deleteNameStmt, deletePathStmt, existing.rowID); err != nil {
+						return err
+					}
 				}
-				if err := bindUpdateEntry(updateStmt, entry, scanID, rowID); err != nil {
+				if err := bindUpdateEntry(updateStmt, entry, scanID, existing.rowID); err != nil {
 					return err
 				}
 				if err := updateStmt.StepDone(); err != nil {
 					return err
 				}
 				updateStmt.Reset()
+				if !refreshFTS {
+					continue
+				}
+				if err := insertFTSRows(insertNameStmt, insertPathStmt, existing.rowID, entry); err != nil {
+					return err
+				}
 			} else {
 				if err := bindInsertEntry(insertStmt, entry, scanID); err != nil {
 					return err
@@ -160,11 +169,10 @@ func (s *SQLiteStore) UpsertBatch(ctx context.Context, scanID int64, batch []mod
 					return err
 				}
 				insertStmt.Reset()
-				rowID = s.db.LastInsertRowID()
-			}
-
-			if err := insertFTSRows(insertNameStmt, insertPathStmt, rowID, entry); err != nil {
-				return err
+				rowID := s.db.LastInsertRowID()
+				if err := insertFTSRows(insertNameStmt, insertPathStmt, rowID, entry); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -376,7 +384,7 @@ func (s *SQLiteStore) DeletePath(ctx context.Context, path string) error {
 		return err
 	}
 
-	lookupStmt, err := s.db.Prepare("SELECT rowid FROM entries WHERE path = ?;")
+	lookupStmt, err := s.db.Prepare("SELECT rowid, path_lower, name_lower FROM entries WHERE path = ?;")
 	if err != nil {
 		return err
 	}
@@ -401,11 +409,11 @@ func (s *SQLiteStore) DeletePath(ctx context.Context, path string) error {
 	defer deleteEntryStmt.Finalize()
 
 	return s.db.WithTx(func() error {
-		rowID, exists, err := lookupRowID(lookupStmt, filepath.Clean(path))
+		entry, exists, err := lookupIndexedEntry(lookupStmt, filepath.Clean(path))
 		if err != nil || !exists {
 			return err
 		}
-		return deleteRowByID(deleteNameStmt, deletePathStmt, deleteEntryStmt, rowID)
+		return deleteRowByID(deleteNameStmt, deletePathStmt, deleteEntryStmt, entry.rowID)
 	})
 }
 
@@ -810,22 +818,37 @@ func (s *sqliteStmt) ColumnInt64(index int) int64 {
 	return int64(C.sqlite3_column_int64(s.stmt, C.int(index)))
 }
 
-func lookupRowID(stmt *sqliteStmt, path string) (int64, bool, error) {
+type indexedEntry struct {
+	rowID     int64
+	pathLower string
+	nameLower string
+}
+
+func (e indexedEntry) needsFTSRefresh(entry model.Entry) bool {
+	return e.pathLower != strings.ToLower(filepath.Clean(entry.Path)) ||
+		e.nameLower != strings.ToLower(entry.Name)
+}
+
+func lookupIndexedEntry(stmt *sqliteStmt, path string) (indexedEntry, bool, error) {
 	defer stmt.Reset()
 	if err := stmt.BindText(1, filepath.Clean(path)); err != nil {
-		return 0, false, err
+		return indexedEntry{}, false, err
 	}
 	row, err := stmt.Step()
 	if err != nil || !row {
-		return 0, false, err
+		return indexedEntry{}, false, err
 	}
-	rowID := stmt.ColumnInt64(0)
+	entry := indexedEntry{
+		rowID:     stmt.ColumnInt64(0),
+		pathLower: stmt.ColumnText(1),
+		nameLower: stmt.ColumnText(2),
+	}
 	if extra, err := stmt.Step(); err != nil {
-		return 0, false, err
+		return indexedEntry{}, false, err
 	} else if extra {
-		return 0, false, fmt.Errorf("duplicate path row found: %s", path)
+		return indexedEntry{}, false, fmt.Errorf("duplicate path row found: %s", path)
 	}
-	return rowID, true, nil
+	return entry, true, nil
 }
 
 func selectStaleRowIDs(stmt *sqliteStmt, root string, scanID int64) ([]int64, error) {

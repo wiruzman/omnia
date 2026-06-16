@@ -163,6 +163,44 @@ func TestSQLiteStoreUpsertRefreshesFTSAndDeletePathPrefix(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreMetadataOnlyUpsertKeepsFTSRows(t *testing.T) {
+	ctx := context.Background()
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Now()
+	entry := model.Entry{
+		Path:       "/tmp/dir/stableneedle.txt",
+		Name:       "stableneedle.txt",
+		ParentPath: "/tmp/dir",
+		RootPath:   "/tmp",
+		Type:       model.TypeFile,
+		Size:       1,
+		CreatedAt:  now,
+		ModifiedAt: now,
+	}
+	if err := st.UpsertBatch(ctx, now.UnixMicro(), []model.Entry{entry}); err != nil {
+		t.Fatal(err)
+	}
+
+	entry.Size = 42
+	entry.ModifiedAt = now.Add(time.Minute)
+	if err := st.UpsertBatch(ctx, now.UnixMicro()+1, []model.Entry{entry}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := st.Query(ctx, "stableneedle", sorter.SortSpec{Column: sorter.SortName, Direction: sorter.Asc}, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Entries) != 1 || res.Entries[0].Size != 42 {
+		t.Fatalf("expected metadata-only upsert to keep FTS searchability and update size, got %+v", res.Entries)
+	}
+}
+
 func TestSQLiteEmptyQueryReturnsVisibleTotalWithoutFullCount(t *testing.T) {
 	ctx := context.Background()
 	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))

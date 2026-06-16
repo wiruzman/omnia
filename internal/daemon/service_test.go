@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/wiruzman/omnia/internal/daemonstate"
 	"github.com/wiruzman/omnia/internal/model"
 	"github.com/wiruzman/omnia/internal/progress"
+	"github.com/wiruzman/omnia/internal/scanner"
 	"github.com/wiruzman/omnia/internal/sorter"
 	"github.com/wiruzman/omnia/internal/startupcache"
 	"github.com/wiruzman/omnia/internal/store"
@@ -136,32 +138,149 @@ func TestStatusEqualDetectsPathProgressChanges(t *testing.T) {
 	}
 }
 
-func TestShouldRefreshIndexedTotal(t *testing.T) {
-	now := time.Unix(1714000000, 0)
-	ready := now.Add(-indexedTotalRefreshInterval - time.Second)
-	notReady := now.Add(-indexedTotalRefreshInterval + time.Second)
+func TestLastIndexedTotalRestoresDaemonStatusTotal(t *testing.T) {
+	cfg := config.Config{DaemonDir: t.TempDir()}
+	if err := daemonstate.Write(cfg.DaemonStatusPath(), daemonstate.Status{IndexedTotal: 123}); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	svc := &Service{cfg: cfg}
+	if got := svc.lastIndexedTotal(); got != 123 {
+		t.Fatalf("expected restored indexed total 123, got %d", got)
+	}
+}
+
+func TestApplyIndexDeltaClampsAtZero(t *testing.T) {
+	if got := applyIndexDelta(10, 5); got != 15 {
+		t.Fatalf("expected incremented total 15, got %d", got)
+	}
+	if got := applyIndexDelta(10, -3); got != 7 {
+		t.Fatalf("expected decremented total 7, got %d", got)
+	}
+	if got := applyIndexDelta(2, -10); got != 0 {
+		t.Fatalf("expected total to clamp at zero, got %d", got)
+	}
+}
+
+func TestShouldTrackPathChangeSkipsExcludedAndDaemonPaths(t *testing.T) {
+	root := filepath.Clean("/tmp/root")
+	daemonDir := filepath.Join(root, ".daemon")
+	svc := &Service{
+		cfg:     config.Config{IncludePaths: []string{root}, DaemonDir: daemonDir},
+		scanner: scanner.New([]string{"node_modules"}),
+	}
 
 	cases := []struct {
-		name           string
-		indexing       bool
-		needsRecount   bool
-		lastCountAt    time.Time
-		wantShouldTick bool
+		name string
+		path string
+		want bool
 	}{
-		{name: "indexing running and interval elapsed", indexing: true, needsRecount: false, lastCountAt: ready, wantShouldTick: false},
-		{name: "needs recount and interval elapsed", indexing: false, needsRecount: true, lastCountAt: ready, wantShouldTick: true},
-		{name: "neither indexing nor recount needed", indexing: false, needsRecount: false, lastCountAt: ready, wantShouldTick: false},
-		{name: "indexing running with recount needed", indexing: true, needsRecount: true, lastCountAt: ready, wantShouldTick: false},
-		{name: "interval not elapsed", indexing: false, needsRecount: true, lastCountAt: notReady, wantShouldTick: false},
+		{name: "normal indexed path", path: filepath.Join(root, "docs", "a.txt"), want: true},
+		{name: "excluded path", path: filepath.Join(root, "node_modules", "pkg", "index.js"), want: false},
+		{name: "daemon path", path: filepath.Join(daemonDir, "status.json"), want: false},
+		{name: "outside root", path: "/tmp/outside/a.txt", want: false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := shouldRefreshIndexedTotal(tc.indexing, tc.needsRecount, tc.lastCountAt, now)
-			if got != tc.wantShouldTick {
-				t.Fatalf("shouldRefreshIndexedTotal(indexing=%v needsRecount=%v) = %v, want %v", tc.indexing, tc.needsRecount, got, tc.wantShouldTick)
+			if got := svc.shouldTrackPathChange(tc.path); got != tc.want {
+				t.Fatalf("shouldTrackPathChange(%q) = %v, want %v", tc.path, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestStartupPreviewPublishPolicyThrottlesDirtyPreview(t *testing.T) {
+	now := time.Unix(1714000000, 0)
+	svc := &Service{
+		cfg: config.Config{MaxResults: 400, SortColumn: string(sorter.SortSize), SortDirection: string(sorter.Desc)},
+		startupPreview: startupPreviewState{
+			sortSpec:    sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc},
+			limit:       startupcache.EffectiveLimit(400),
+			publishedAt: now,
+		},
+	}
+
+	if svc.shouldPublishStartupPreview(false, false, now.Add(2*time.Hour)) {
+		t.Fatal("did not expect clean preview to publish")
+	}
+	if svc.shouldPublishStartupPreview(true, false, now.Add(10*time.Second)) {
+		t.Fatal("did not expect dirty preview to publish before throttle interval")
+	}
+	if !svc.shouldPublishStartupPreview(true, false, now.Add(startupPreviewMinInterval+time.Second)) {
+		t.Fatal("expected dirty preview to publish after throttle interval")
+	}
+	if !svc.shouldPublishStartupPreview(true, true, now.Add(10*time.Second)) {
+		t.Fatal("expected forced preview to publish immediately")
+	}
+}
+
+func TestStartupPreviewRelevanceUsesTopBoundary(t *testing.T) {
+	now := time.Unix(1714000000, 0)
+	sortSpec := sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc}
+	svc := &Service{
+		cfg: config.Config{MaxResults: 2, SortColumn: string(sorter.SortSize), SortDirection: string(sorter.Desc)},
+		now: func() time.Time {
+			return now
+		},
+	}
+	svc.setStartupPreviewState(sortSpec, 2, store.QueryResult{Entries: []model.Entry{
+		{Path: "/root/large.bin", Name: "large.bin", Size: 100},
+		{Path: "/root/medium.bin", Name: "medium.bin", Size: 50},
+	}})
+
+	if svc.entryMayAffectStartupPreview(model.Entry{Path: "/root/small.bin", Name: "small.bin", Size: 1}) {
+		t.Fatal("did not expect small outside-preview entry to affect full size-desc preview")
+	}
+	if !svc.entryMayAffectStartupPreview(model.Entry{Path: "/root/huge.bin", Name: "huge.bin", Size: 500}) {
+		t.Fatal("expected large outside-preview entry to affect full size-desc preview")
+	}
+	if !svc.entryMayAffectStartupPreview(model.Entry{Path: "/root/medium.bin", Name: "medium.bin", Size: 1}) {
+		t.Fatal("expected changed preview member to affect preview")
+	}
+	if svc.deletedPathMayAffectStartupPreview("/root/untracked.bin") {
+		t.Fatal("did not expect outside-preview delete to affect preview")
+	}
+	if !svc.deletedPathMayAffectStartupPreview("/root/large.bin") {
+		t.Fatal("expected preview member delete to affect preview")
+	}
+}
+
+func TestFlushPendingSkipsUnchangedEntry(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	path := filepath.Join(root, "same.txt")
+	if err := os.WriteFile(path, []byte("same"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	scan := scanner.New(nil)
+	entry, err := scan.EntryFromPath(path, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertEntry(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{
+		cfg:     config.Config{IncludePaths: []string{root}, DaemonDir: filepath.Join(root, ".daemon")},
+		store:   st,
+		scanner: scan,
+		logger:  log.New(io.Discard, "", 0),
+	}
+
+	stats, err := svc.flushPending(ctx, map[string]struct{}{path: {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Upserts != 0 || stats.Deletes != 0 || stats.Skipped != 1 || stats.PreviewRelevant {
+		t.Fatalf("expected unchanged path to be skipped without preview relevance, got %+v", stats)
 	}
 }
 

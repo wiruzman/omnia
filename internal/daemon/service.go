@@ -15,6 +15,7 @@ import (
 	"github.com/wiruzman/omnia/internal/daemonstate"
 	"github.com/wiruzman/omnia/internal/indexer"
 	"github.com/wiruzman/omnia/internal/logging"
+	"github.com/wiruzman/omnia/internal/model"
 	"github.com/wiruzman/omnia/internal/progress"
 	"github.com/wiruzman/omnia/internal/scanner"
 	"github.com/wiruzman/omnia/internal/sorter"
@@ -23,18 +24,28 @@ import (
 )
 
 type Service struct {
-	cfg     config.Config
-	store   store.Backend
-	scanner *scanner.Scanner
-	indexer *indexer.Indexer
-	logger  logging.PrintfLogger
+	cfg            config.Config
+	store          store.Backend
+	scanner        *scanner.Scanner
+	indexer        *indexer.Indexer
+	logger         logging.PrintfLogger
+	startupPreview startupPreviewState
+	now            func() time.Time
 }
 
 const watchEventMask = notify.Create | notify.Write | notify.Remove | notify.Rename
 
 const statusHeartbeatInterval = 15 * time.Second
-const incrementalFlushDebounce = 900 * time.Millisecond
-const indexedTotalRefreshInterval = time.Minute
+const incrementalFlushDebounce = 3 * time.Second
+const startupPreviewMinInterval = time.Minute
+
+type startupPreviewState struct {
+	sortSpec    sorter.SortSpec
+	limit       int
+	entries     []model.Entry
+	paths       map[string]struct{}
+	publishedAt time.Time
+}
 
 func New(cfg config.Config, logger logging.PrintfLogger) (*Service, error) {
 	st, err := store.OpenSQLite(cfg.IndexDBPath)
@@ -58,19 +69,19 @@ func (s *Service) Run(ctx context.Context) error {
 
 	s.logger.Printf("daemon started | db=%s | status=%s | trigger=%s", s.cfg.IndexDBPath, s.cfg.DaemonStatusPath(), s.cfg.DaemonTriggerPath())
 
-	indexedTotal := 0
-	needsRecount := false
-	snapshotDirty := true
+	indexedTotal := s.lastIndexedTotal()
 	snapshotSeq := int64(0)
-	lastCountAt := time.Now()
 	hasWrittenStatus := false
 	lastWrittenStatus := daemonstate.Status{}
 	lastStatusWrite := time.Time{}
+	startupPreviewDirty := false
+	forceStartupPreviewPublish := false
 
-	count, err := s.store.Count(ctx)
-	if err == nil {
-		indexedTotal = count
-		s.logger.Printf("initial indexed entries: %d", count)
+	hasEntries, err := s.store.HasEntries(ctx)
+	if err != nil {
+		s.logger.Printf("check initial index state failed: %v", err)
+	} else {
+		s.logger.Printf("initial indexed entries estimate: %d", indexedTotal)
 	}
 
 	initialStatus := s.buildStatus(indexedTotal, snapshotSeq)
@@ -81,7 +92,7 @@ func (s *Service) Run(ctx context.Context) error {
 		lastWrittenStatus = initialStatus
 		lastStatusWrite = time.Now()
 	}
-	if err == nil && count == 0 {
+	if err == nil && !hasEntries {
 		s.logger.Printf("index is empty, requesting initial full reindex")
 		if err := daemonstate.RequestFreshReindex(s.cfg.DaemonFreshStartPath()); err != nil {
 			s.logger.Printf("request initial fresh reindex failed: %v", err)
@@ -92,14 +103,11 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 
 	if !s.indexer.IsRunning() {
-		if err := s.publishSearchSnapshot(ctx); err != nil {
-			s.logger.Printf("publish search snapshot failed: %v", err)
-		} else {
-			snapshotDirty = false
-			snapshotSeq++
+		if err := s.publishStartupPreviewCache(ctx); err != nil {
+			s.logger.Printf("publish startup preview cache failed: %v", err)
 		}
 	} else {
-		s.logger.Printf("skipping search snapshot publish while initial indexing is running")
+		s.logger.Printf("skipping startup preview cache publish while initial indexing is running")
 	}
 
 	events := make(chan notify.EventInfo, 8192)
@@ -144,7 +152,7 @@ func (s *Service) Run(ctx context.Context) error {
 		case e := <-events:
 			if e != nil {
 				path := filepath.Clean(e.Path())
-				if !s.isDaemonManagedPath(path) {
+				if s.shouldTrackPathChange(path) {
 					pending[path] = struct{}{}
 					resetTimer(flushTimer, incrementalFlushDebounce)
 				}
@@ -158,9 +166,12 @@ func (s *Service) Run(ctx context.Context) error {
 				s.logger.Printf("flush pending failed: %v", err)
 			} else if stats.Total > 0 {
 				s.logger.Printf("incremental flush | total=%d upserts=%d deletes=%d skipped=%d failures=%d", stats.Total, stats.Upserts, stats.Deletes, stats.Skipped, stats.Failures)
-				if stats.Upserts > 0 || stats.Deletes > 0 {
-					needsRecount = true
-					snapshotDirty = true
+				if stats.hasChanges() {
+					indexedTotal = applyIndexDelta(indexedTotal, stats.IndexDelta)
+					snapshotSeq++
+					if stats.PreviewRelevant {
+						startupPreviewDirty = true
+					}
 				}
 			}
 		case <-triggerTicker.C:
@@ -180,14 +191,12 @@ func (s *Service) Run(ctx context.Context) error {
 			if stopRequested && s.indexer.IsRunning() {
 				s.logger.Printf("stop reindex requested")
 				s.indexer.Stop()
-				snapshotDirty = true
 				continue
 			}
 
 			if pendingFreshStart {
 				if s.indexer.IsRunning() {
 					s.indexer.Stop()
-					snapshotDirty = true
 					continue
 				}
 				if err := s.startReindexFromScratch(ctx, "fresh reindex request"); err != nil {
@@ -213,15 +222,6 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 		case <-statusTicker.C:
 			idx := s.indexer.CurrentStatus()
-			if shouldRefreshIndexedTotal(idx.Running, needsRecount, lastCountAt, time.Now()) {
-				if total, err := s.store.Count(ctx); err == nil {
-					indexedTotal = total
-					if !idx.Running {
-						needsRecount = false
-					}
-					lastCountAt = time.Now()
-				}
-			}
 			if idx.Running && (!lastIndexing || time.Since(lastProgressLog) >= 3*time.Second) {
 				s.logger.Printf("indexing progress | scanned=%d current=%s", idx.Scanned, trimMiddle(idx.CurrentPath, 90))
 				lastProgressLog = time.Now()
@@ -229,20 +229,21 @@ func (s *Service) Run(ctx context.Context) error {
 			if lastIndexing && !idx.Running {
 				total, _ := s.store.Count(ctx)
 				indexedTotal = total
-				needsRecount = false
-				lastCountAt = time.Now()
-				snapshotDirty = true
+				snapshotSeq++
+				startupPreviewDirty = true
+				forceStartupPreviewPublish = true
 				s.logger.Printf("indexing finished | total_indexed=%d last_error=%s", total, idx.LastError)
 				if len(pending) > 0 {
 					resetTimer(flushTimer, incrementalFlushDebounce)
 				}
 			}
-			if !idx.Running && snapshotDirty {
-				if err := s.publishSearchSnapshot(ctx); err != nil {
-					s.logger.Printf("publish search snapshot failed: %v", err)
+			now := s.currentTime()
+			if !idx.Running && s.shouldPublishStartupPreview(startupPreviewDirty, forceStartupPreviewPublish, now) {
+				if err := s.publishStartupPreviewCache(ctx); err != nil {
+					s.logger.Printf("publish startup preview cache failed: %v", err)
 				} else {
-					snapshotDirty = false
-					snapshotSeq++
+					startupPreviewDirty = false
+					forceStartupPreviewPublish = false
 				}
 			}
 			lastIndexing = idx.Running
@@ -274,11 +275,20 @@ func (s *Service) startReindexFromScratch(ctx context.Context, reason string) er
 	return s.startReindex(ctx, reason)
 }
 
-func shouldRefreshIndexedTotal(indexingRunning bool, needsRecount bool, lastCountAt time.Time, now time.Time) bool {
-	if now.Sub(lastCountAt) < indexedTotalRefreshInterval {
-		return false
+func (s *Service) lastIndexedTotal() int {
+	st, err := daemonstate.Read(s.cfg.DaemonStatusPath())
+	if err != nil || st.IndexedTotal < 0 {
+		return 0
 	}
-	return !indexingRunning && needsRecount
+	return st.IndexedTotal
+}
+
+func applyIndexDelta(total int, delta int) int {
+	total += delta
+	if total < 0 {
+		return 0
+	}
+	return total
 }
 
 func resetTimer(timer *time.Timer, delay time.Duration) {
@@ -297,11 +307,24 @@ func stopTimer(timer *time.Timer) {
 }
 
 type flushStats struct {
-	Total    int
-	Upserts  int
-	Deletes  int
-	Skipped  int
-	Failures int
+	Total           int
+	Upserts         int
+	Deletes         int
+	Skipped         int
+	Failures        int
+	IndexDelta      int
+	PreviewRelevant bool
+}
+
+func (s flushStats) hasChanges() bool {
+	return s.Upserts > 0 || s.Deletes > 0
+}
+
+type pathChangeResult struct {
+	Upserted   int
+	Deleted    int
+	IndexDelta int
+	Entry      model.Entry
 }
 
 func (s *Service) flushPending(ctx context.Context, pending map[string]struct{}) (flushStats, error) {
@@ -316,61 +339,67 @@ func (s *Service) flushPending(ctx context.Context, pending map[string]struct{})
 	stats.Total = len(paths)
 	for _, path := range paths {
 		delete(pending, path)
-		if s.isDaemonManagedPath(path) {
+		if !s.shouldTrackPathChange(path) {
 			stats.Skipped++
 			continue
 		}
-		if s.scanner.ShouldExclude(path) {
-			stats.Skipped++
-			continue
-		}
-		root := rootForPath(s.cfg.IncludePaths, path)
-		if root == "" {
-			stats.Skipped++
-			continue
-		}
-		deleted, err := s.applyPathChange(ctx, path, root)
+		result, err := s.applyPathChange(ctx, path, rootForPath(s.cfg.IncludePaths, path))
 		if err != nil {
 			stats.Failures++
 			s.logger.Printf("apply path change %s failed: %v", path, err)
 			continue
 		}
-		if deleted {
-			stats.Deletes++
-		} else {
-			stats.Upserts++
+		if result.Deleted > 0 {
+			stats.Deletes += result.Deleted
+			stats.IndexDelta -= result.Deleted
+			if s.deletedPathMayAffectStartupPreview(path) {
+				stats.PreviewRelevant = true
+			}
+			continue
 		}
+		if result.Upserted > 0 {
+			stats.Upserts += result.Upserted
+			stats.IndexDelta += result.IndexDelta
+			if s.entryMayAffectStartupPreview(result.Entry) {
+				stats.PreviewRelevant = true
+			}
+			continue
+		}
+		stats.Skipped++
 	}
 	return stats, nil
 }
 
-func (s *Service) applyPathChange(ctx context.Context, path, root string) (bool, error) {
-	_, err := os.Lstat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			if err := s.store.DeletePathPrefix(ctx, path); err != nil {
-				return false, err
-			}
-			return true, nil
-		}
-		if os.IsPermission(err) {
-			return false, nil
-		}
-		return false, err
-	}
-
+func (s *Service) applyPathChange(ctx context.Context, path, root string) (pathChangeResult, error) {
 	entry, err := s.scanner.EntryFromPath(path, root)
 	if err != nil {
-		if os.IsPermission(err) {
-			return false, nil
+		if errors.Is(err, os.ErrNotExist) {
+			deleted, err := s.store.DeletePathPrefixCount(ctx, path)
+			if err != nil {
+				return pathChangeResult{}, err
+			}
+			return pathChangeResult{Deleted: deleted}, nil
 		}
-		return false, err
+		if os.IsPermission(err) {
+			return pathChangeResult{}, nil
+		}
+		return pathChangeResult{}, err
 	}
-	if err := s.store.UpsertEntry(ctx, entry); err != nil {
-		return false, err
+
+	result, err := s.store.UpsertEntryIfChanged(ctx, entry)
+	if err != nil {
+		return pathChangeResult{}, err
 	}
-	return false, nil
+	if !result.Changed {
+		return pathChangeResult{}, nil
+	}
+	indexDelta := 0
+	if result.Inserted {
+		indexDelta = 1
+	}
+	return pathChangeResult{Upserted: 1, IndexDelta: indexDelta, Entry: entry}, nil
 }
+
 func (s *Service) buildStatus(indexedTotal int, snapshotSeq int64) daemonstate.Status {
 	idx := s.indexer.CurrentStatus()
 	return daemonstate.Status{
@@ -384,7 +413,6 @@ func (s *Service) buildStatus(indexedTotal int, snapshotSeq int64) daemonstate.S
 		IndexedTotal: indexedTotal,
 		SnapshotSeq:  snapshotSeq,
 	}
-
 }
 
 func (s *Service) writeStatus(st daemonstate.Status) error {
@@ -419,6 +447,16 @@ func pathProgressEqual(a, b []progress.PathProgress) bool {
 	return true
 }
 
+func (s *Service) shouldTrackPathChange(path string) bool {
+	if s.isDaemonManagedPath(path) {
+		return false
+	}
+	if s.scanner != nil && s.scanner.ShouldExclude(path) {
+		return false
+	}
+	return rootForPath(s.cfg.IncludePaths, path) != ""
+}
+
 func (s *Service) isDaemonManagedPath(path string) bool {
 	return s.cfg.IsRuntimePath(path)
 }
@@ -437,24 +475,102 @@ func rootForPath(roots []string, path string) string {
 	return best
 }
 
-func (s *Service) publishSearchSnapshot(ctx context.Context) error {
-	if err := s.publishStartupPreviewCache(ctx); err != nil {
-		s.logger.Printf("publish startup preview cache failed: %v", err)
+func (s *Service) currentTime() time.Time {
+	if s.now != nil {
+		return s.now()
 	}
-	return nil
+	return time.Now()
+}
+
+func (s *Service) shouldPublishStartupPreview(dirty bool, force bool, now time.Time) bool {
+	if !dirty {
+		return false
+	}
+	sortSpec := s.startupPreviewSortSpec()
+	limit := startupcache.EffectiveLimit(s.cfg.MaxResults)
+	if force || s.startupPreview.publishedAt.IsZero() || s.startupPreview.sortSpec != sortSpec || s.startupPreview.limit != limit {
+		return true
+	}
+	return now.Sub(s.startupPreview.publishedAt) >= startupPreviewMinInterval
 }
 
 func (s *Service) publishStartupPreviewCache(ctx context.Context) error {
 	limit := startupcache.EffectiveLimit(s.cfg.MaxResults)
-	sortSpec := sorter.SortSpec{
-		Column:    sorter.Column(s.cfg.SortColumn),
-		Direction: sorter.Direction(s.cfg.SortDirection),
-	}
+	sortSpec := s.startupPreviewSortSpec()
 	res, err := s.store.Preview(ctx, sortSpec, limit)
 	if err != nil {
 		return err
 	}
-	return startupcache.Save(startupcache.Path(s.cfg), sortSpec, limit, res)
+	if err := startupcache.Save(startupcache.Path(s.cfg), sortSpec, limit, res); err != nil {
+		return err
+	}
+	s.setStartupPreviewState(sortSpec, limit, res)
+	return nil
+}
+
+func (s *Service) startupPreviewSortSpec() sorter.SortSpec {
+	return sorter.SortSpec{
+		Column:    sorter.Column(s.cfg.SortColumn),
+		Direction: sorter.Direction(s.cfg.SortDirection),
+	}
+}
+
+func (s *Service) setStartupPreviewState(sortSpec sorter.SortSpec, limit int, result store.QueryResult) {
+	entries := append([]model.Entry(nil), result.Entries...)
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	paths := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		paths[filepath.Clean(entry.Path)] = struct{}{}
+	}
+	s.startupPreview = startupPreviewState{
+		sortSpec:    sortSpec,
+		limit:       limit,
+		entries:     entries,
+		paths:       paths,
+		publishedAt: s.currentTime(),
+	}
+}
+
+func (s *Service) entryMayAffectStartupPreview(entry model.Entry) bool {
+	state := s.startupPreview
+	sortSpec := s.startupPreviewSortSpec()
+	limit := startupcache.EffectiveLimit(s.cfg.MaxResults)
+	if state.publishedAt.IsZero() || state.sortSpec != sortSpec || state.limit != limit {
+		return true
+	}
+	if _, ok := state.paths[filepath.Clean(entry.Path)]; ok {
+		return true
+	}
+	if len(state.entries) < state.limit {
+		return true
+	}
+	if len(state.entries) == 0 {
+		return true
+	}
+	boundary := state.entries[len(state.entries)-1]
+	return startupcache.CompareEntries(entry, boundary, state.sortSpec) <= 0
+}
+
+func (s *Service) deletedPathMayAffectStartupPreview(path string) bool {
+	state := s.startupPreview
+	sortSpec := s.startupPreviewSortSpec()
+	limit := startupcache.EffectiveLimit(s.cfg.MaxResults)
+	if state.publishedAt.IsZero() || state.sortSpec != sortSpec || state.limit != limit {
+		return true
+	}
+	if len(state.entries) == 0 {
+		return false
+	}
+	cleanPath := filepath.Clean(path)
+	prefix := cleanPath + string(os.PathSeparator)
+	for previewPath := range state.paths {
+		if previewPath == cleanPath || strings.HasPrefix(previewPath, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func RunMain(ctx context.Context) error {

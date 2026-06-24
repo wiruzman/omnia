@@ -27,6 +27,9 @@ func TestDefaultScanThrottle(t *testing.T) {
 	if cfg.ScanThrottleMs != 5 {
 		t.Fatalf("expected default scan_throttle_ms 5, got %d", cfg.ScanThrottleMs)
 	}
+	if cfg.SkipPackageContents {
+		t.Fatal("expected skip_package_contents to default to false")
+	}
 	if cfg.DaemonLogFile != "daemon.log" {
 		t.Fatalf("expected default daemon_log_file daemon.log, got %q", cfg.DaemonLogFile)
 	}

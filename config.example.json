@@ -21,5 +21,6 @@
   "debounce_ms": 120,
   "scan_batch_size": 1000,
   "scan_throttle_every": 250,
-  "scan_throttle_ms": 5
+  "scan_throttle_ms": 5,
+  "skip_package_contents": false
 }

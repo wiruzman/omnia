@@ -138,6 +138,19 @@ func TestStatusEqualDetectsPathProgressChanges(t *testing.T) {
 	}
 }
 
+func TestStatusEqualIgnoresDiskIOCounters(t *testing.T) {
+	a := daemonstate.Status{
+		Running: true,
+		DiskIO:  daemonstate.DiskIOStats{BytesRead: 100, BytesWritten: 200, ReadBytesPerSecond: 10},
+	}
+	b := a
+	b.DiskIO = daemonstate.DiskIOStats{BytesRead: 200, BytesWritten: 400, ReadBytesPerSecond: 20}
+
+	if !statusEqual(a, b) {
+		t.Fatal("expected disk I/O changes alone not to force status writes")
+	}
+}
+
 func TestLastIndexedTotalRestoresDaemonStatusTotal(t *testing.T) {
 	cfg := config.Config{DaemonDir: t.TempDir()}
 	if err := daemonstate.Write(cfg.DaemonStatusPath(), daemonstate.Status{IndexedTotal: 123}); err != nil {
@@ -166,7 +179,7 @@ func TestShouldTrackPathChangeSkipsExcludedAndDaemonPaths(t *testing.T) {
 	daemonDir := filepath.Join(root, ".daemon")
 	svc := &Service{
 		cfg:     config.Config{IncludePaths: []string{root}, DaemonDir: daemonDir},
-		scanner: scanner.New([]string{"node_modules"}),
+		scanner: scanner.NewWithOptions([]string{"node_modules"}, true),
 	}
 
 	cases := []struct {
@@ -176,6 +189,7 @@ func TestShouldTrackPathChangeSkipsExcludedAndDaemonPaths(t *testing.T) {
 	}{
 		{name: "normal indexed path", path: filepath.Join(root, "docs", "a.txt"), want: true},
 		{name: "excluded path", path: filepath.Join(root, "node_modules", "pkg", "index.js"), want: false},
+		{name: "package child", path: filepath.Join(root, "Example.app", "Contents", "Info.plist"), want: false},
 		{name: "daemon path", path: filepath.Join(daemonDir, "status.json"), want: false},
 		{name: "outside root", path: "/tmp/outside/a.txt", want: false},
 	}

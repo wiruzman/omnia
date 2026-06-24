@@ -52,6 +52,46 @@ func TestWalkCollectsEntriesAndSkipsExcluded(t *testing.T) {
 	}
 }
 
+func TestWalkSkipsPackageContentsWhenConfigured(t *testing.T) {
+	tmp := t.TempDir()
+	appRoot := filepath.Join(tmp, "Example.app")
+	if err := os.MkdirAll(filepath.Join(appRoot, "Contents", "MacOS"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appRoot, "Contents", "MacOS", "binary"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewWithOptions(nil, true)
+	var entries []model.Entry
+	err := s.Walk([]string{tmp}, func(e model.Entry) error {
+		entries = append(entries, e)
+		return nil
+	}, nil, func(error) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sawPackageRoot bool
+	for _, e := range entries {
+		if e.Path == appRoot {
+			sawPackageRoot = true
+		}
+		if filepath.Base(e.Path) == "binary" || filepath.Base(e.Path) == "Contents" {
+			t.Fatalf("expected package contents to be skipped, saw %s", e.Path)
+		}
+	}
+	if !sawPackageRoot {
+		t.Fatal("expected package root to be indexed")
+	}
+	if !s.ShouldSkipPackageChild(filepath.Join(appRoot, "Contents", "Info.plist")) {
+		t.Fatal("expected child path to be recognized as package content")
+	}
+	if s.ShouldSkipPackageChild(appRoot) {
+		t.Fatal("did not expect package root to be recognized as package content")
+	}
+}
+
 func TestWalkMissingRootWarns(t *testing.T) {
 	s := New(nil)
 	warned := false

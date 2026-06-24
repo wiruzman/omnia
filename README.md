@@ -158,6 +158,7 @@ Key fields:
 - scan_batch_size: batch size for index upserts
 - scan_throttle_every: number of scanned entries between low-power pauses during full reindex
 - scan_throttle_ms: pause duration for each low-power scan pause; set to 0 to disable throttling
+- skip_package_contents: index macOS package directories such as .app and .framework, but skip their internal contents
 
 ## Benchmark
 

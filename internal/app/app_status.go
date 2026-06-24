@@ -41,9 +41,34 @@ func (a *App) updateStatus() {
 		deleteText = fmt.Sprintf(" | deleting: %s %s", frame, trimMiddle(deletePath, 60))
 	}
 	activityText := a.activityText()
-	a.status.SetText(fmt.Sprintf("%s | visible: %d | activity: %s | sort: %s %s | %s%s | query: %s",
-		countLabel, a.visible, activityText, a.sortSpec.Column, a.sortSpec.Direction, indexText, deleteText, query))
+	ioText := a.daemonIOText()
+	a.status.SetText(fmt.Sprintf("%s | visible: %d | activity: %s%s | sort: %s %s | %s%s | query: %s",
+		countLabel, a.visible, activityText, ioText, a.sortSpec.Column, a.sortSpec.Direction, indexText, deleteText, query))
 	a.renderProgressTable()
+}
+
+func (a *App) daemonIOText() string {
+	if !a.hasDaemonStatus {
+		return ""
+	}
+	io := a.lastDaemonStatus.DiskIO
+	if io.BytesRead == 0 && io.BytesWritten == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" | io: r %s/s w %s/s", formatBytesPerSecond(io.ReadBytesPerSecond), formatBytesPerSecond(io.WriteBytesPerSecond))
+}
+
+func formatBytesPerSecond(v float64) string {
+	if v < 1024 {
+		return fmt.Sprintf("%.0f B", v)
+	}
+	if v < 1024*1024 {
+		return fmt.Sprintf("%.1f KiB", v/1024)
+	}
+	if v < 1024*1024*1024 {
+		return fmt.Sprintf("%.1f MiB", v/(1024*1024))
+	}
+	return fmt.Sprintf("%.1f GiB", v/(1024*1024*1024))
 }
 
 func (a *App) startStatusLoop(ctx context.Context) {

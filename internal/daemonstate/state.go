@@ -21,6 +21,16 @@ type Status struct {
 	UpdatedAt    time.Time               `json:"updated_at"`
 	IndexedTotal int                     `json:"indexed_total"`
 	SnapshotSeq  int64                   `json:"snapshot_seq"`
+	DiskIO       DiskIOStats             `json:"disk_io,omitempty"`
+}
+
+type DiskIOStats struct {
+	BytesRead                  uint64  `json:"bytes_read,omitempty"`
+	BytesWritten               uint64  `json:"bytes_written,omitempty"`
+	LogicalBytesWritten        uint64  `json:"logical_bytes_written,omitempty"`
+	ReadBytesPerSecond         float64 `json:"read_bytes_per_second,omitempty"`
+	WriteBytesPerSecond        float64 `json:"write_bytes_per_second,omitempty"`
+	LogicalWriteBytesPerSecond float64 `json:"logical_write_bytes_per_second,omitempty"`
 }
 
 type ReindexResumeState struct {

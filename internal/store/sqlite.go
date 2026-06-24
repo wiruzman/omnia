@@ -464,8 +464,11 @@ func (s *SQLiteStore) UpsertEntryIfChanged(ctx context.Context, e model.Entry) (
 			return nil
 		}
 		if exists {
-			if err := deleteFTSRows(deleteNameStmt, deletePathStmt, rowID); err != nil {
-				return err
+			refreshFTS := entryNeedsFTSRefresh(existing, e)
+			if refreshFTS {
+				if err := deleteFTSRows(deleteNameStmt, deletePathStmt, rowID); err != nil {
+					return err
+				}
 			}
 			if err := bindUpdateEntry(updateStmt, e, scanID, rowID); err != nil {
 				return err
@@ -474,6 +477,10 @@ func (s *SQLiteStore) UpsertEntryIfChanged(ctx context.Context, e model.Entry) (
 				return err
 			}
 			updateStmt.Reset()
+			if !refreshFTS {
+				result = UpsertEntryResult{Changed: true, Inserted: false}
+				return nil
+			}
 		} else {
 			if err := bindInsertEntry(insertStmt, e, scanID); err != nil {
 				return err
@@ -625,15 +632,66 @@ func (s *SQLiteStore) setup() error {
 		"CREATE INDEX IF NOT EXISTS entries_size_desc_idx ON entries(size DESC, path_lower ASC);",
 		"CREATE INDEX IF NOT EXISTS entries_name_lower_desc_idx ON entries(name_lower DESC, path_lower ASC);",
 		"CREATE INDEX IF NOT EXISTS entries_root_scan_idx ON entries(root_path, last_seen_scan);",
-		"CREATE VIRTUAL TABLE IF NOT EXISTS name_fts USING fts5(name_lower, tokenize = 'trigram');",
-		"CREATE VIRTUAL TABLE IF NOT EXISTS path_fts USING fts5(path_lower, tokenize = 'trigram');",
 	}
 	for _, statement := range statements {
 		if err := s.db.Exec(statement); err != nil {
 			return err
 		}
 	}
+	return s.ensureContentlessFTS()
+}
+
+func (s *SQLiteStore) ensureContentlessFTS() error {
+	for _, table := range []struct {
+		name   string
+		column string
+	}{
+		{name: "name_fts", column: "name_lower"},
+		{name: "path_fts", column: "path_lower"},
+	} {
+		contentless, exists, err := s.isContentlessFTSTable(table.name)
+		if err != nil {
+			return err
+		}
+		if exists && contentless {
+			continue
+		}
+		if err := s.rebuildContentlessFTS(table.name, table.column); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (s *SQLiteStore) isContentlessFTSTable(name string) (bool, bool, error) {
+	stmt, err := s.db.Prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?;")
+	if err != nil {
+		return false, false, err
+	}
+	defer stmt.Finalize()
+	if err := stmt.BindText(1, name); err != nil {
+		return false, false, err
+	}
+	row, err := stmt.Step()
+	if err != nil || !row {
+		return false, false, err
+	}
+	sql := strings.ToLower(stmt.ColumnText(0))
+	return strings.Contains(sql, "contentless_delete") && strings.Contains(sql, "content=''"), true, nil
+}
+
+func (s *SQLiteStore) rebuildContentlessFTS(name, column string) error {
+	createSQL := fmt.Sprintf("CREATE VIRTUAL TABLE %s USING fts5(%s, content='', contentless_delete=1, tokenize = 'trigram');", name, column)
+	rebuildSQL := fmt.Sprintf("INSERT INTO %s(rowid, %s) SELECT rowid, %s FROM entries;", name, column, column)
+	return s.db.WithTx(func() error {
+		if err := s.db.Exec("DROP TABLE IF EXISTS " + name + ";"); err != nil {
+			return err
+		}
+		if err := s.db.Exec(createSQL); err != nil {
+			return err
+		}
+		return s.db.Exec(rebuildSQL)
+	})
 }
 
 func (s *SQLiteStore) queryPrefix(ctx context.Context, field string, prefix string, sortSpec sorter.SortSpec, limit, offset int) ([]model.Entry, error) {
@@ -1016,6 +1074,11 @@ func sameIndexedEntry(a, b model.Entry) bool {
 		a.Size == b.Size &&
 		a.CreatedAt.Unix() == b.CreatedAt.Unix() &&
 		a.ModifiedAt.Unix() == b.ModifiedAt.Unix()
+}
+
+func entryNeedsFTSRefresh(a, b model.Entry) bool {
+	return strings.ToLower(filepath.Clean(a.Path)) != strings.ToLower(filepath.Clean(b.Path)) ||
+		strings.ToLower(a.Name) != strings.ToLower(b.Name)
 }
 
 func selectStaleRowIDs(stmt *sqliteStmt, root string, scanID int64) ([]int64, error) {

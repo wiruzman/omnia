@@ -21,7 +21,8 @@ type Progress struct {
 }
 
 type Scanner struct {
-	excludes []string
+	excludes            []string
+	skipPackageContents bool
 }
 
 type WalkOptions struct {
@@ -37,6 +38,10 @@ func New(excludes []string) *Scanner {
 	return &Scanner{excludes: excludes}
 }
 
+func NewWithOptions(excludes []string, skipPackageContents bool) *Scanner {
+	return &Scanner{excludes: excludes, skipPackageContents: skipPackageContents}
+}
+
 func (s *Scanner) ShouldExclude(path string) bool {
 	normalized := strings.ToLower(filepath.ToSlash(path))
 	for _, raw := range s.excludes {
@@ -49,6 +54,47 @@ func (s *Scanner) ShouldExclude(path string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Scanner) ShouldSkipPackageChild(path string) bool {
+	if !s.skipPackageContents {
+		return false
+	}
+	normalized := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+	parts := strings.Split(normalized, "/")
+	for i, part := range parts {
+		if isPackageName(part) && i < len(parts)-1 {
+			return true
+		}
+	}
+	return false
+}
+
+func isPackageName(name string) bool {
+	for _, suffix := range packageSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+var packageSuffixes = []string{
+	".app",
+	".appex",
+	".bundle",
+	".component",
+	".framework",
+	".kext",
+	".mdimporter",
+	".plugin",
+	".prefpane",
+	".qlgenerator",
+	".saver",
+	".service",
+	".workflow",
+	".xcframework",
+	".xpc",
 }
 
 func (s *Scanner) Walk(roots []string, emit func(model.Entry) error, progress func(Progress), onWarn func(error)) error {
@@ -110,7 +156,7 @@ func (s *Scanner) WalkWithOptions(roots []string, emit func(model.Entry) error, 
 				return nil
 			}
 
-			if s.ShouldExclude(abs) || (options.SkipPath != nil && options.SkipPath(abs)) {
+			if s.ShouldExclude(abs) || s.ShouldSkipPackageChild(abs) || (options.SkipPath != nil && options.SkipPath(abs)) {
 				if d.IsDir() {
 					return fs.SkipDir
 				}

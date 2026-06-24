@@ -10,21 +10,22 @@ import (
 )
 
 type Config struct {
-	IncludePaths      []string `json:"include_paths"`
-	ExcludeGlobs      []string `json:"exclude_globs"`
-	IndexDBPath       string   `json:"index_db_path"`
-	MaxResults        int      `json:"max_results"`
-	DebounceMs        int      `json:"debounce_ms"`
-	ScanBatchSize     int      `json:"scan_batch_size"`
-	ScanThrottleEvery int      `json:"scan_throttle_every"`
-	ScanThrottleMs    int      `json:"scan_throttle_ms"`
-	DaemonDir         string   `json:"daemon_dir"`
-	DaemonLogFile     string   `json:"daemon_log_file"`
-	DaemonLogLevel    string   `json:"daemon_log_level"`
-	DaemonLogMaxBytes int64    `json:"daemon_log_max_bytes"`
-	DaemonLogBackups  int      `json:"daemon_log_backups"`
-	SortColumn        string   `json:"sort_column"`
-	SortDirection     string   `json:"sort_direction"`
+	IncludePaths        []string `json:"include_paths"`
+	ExcludeGlobs        []string `json:"exclude_globs"`
+	IndexDBPath         string   `json:"index_db_path"`
+	MaxResults          int      `json:"max_results"`
+	DebounceMs          int      `json:"debounce_ms"`
+	ScanBatchSize       int      `json:"scan_batch_size"`
+	ScanThrottleEvery   int      `json:"scan_throttle_every"`
+	ScanThrottleMs      int      `json:"scan_throttle_ms"`
+	SkipPackageContents bool     `json:"skip_package_contents"`
+	DaemonDir           string   `json:"daemon_dir"`
+	DaemonLogFile       string   `json:"daemon_log_file"`
+	DaemonLogLevel      string   `json:"daemon_log_level"`
+	DaemonLogMaxBytes   int64    `json:"daemon_log_max_bytes"`
+	DaemonLogBackups    int      `json:"daemon_log_backups"`
+	SortColumn          string   `json:"sort_column"`
+	SortDirection       string   `json:"sort_direction"`
 }
 
 func configDir() (string, error) {
@@ -54,19 +55,20 @@ func Default() (Config, error) {
 			".Trash",
 			"Trash",
 		},
-		IndexDBPath:       "index.sqlite",
-		MaxResults:        5000,
-		DebounceMs:        120,
-		ScanBatchSize:     1000,
-		ScanThrottleEvery: 250,
-		ScanThrottleMs:    5,
-		DaemonDir:         "daemon",
-		DaemonLogFile:     "daemon.log",
-		DaemonLogLevel:    "info",
-		DaemonLogMaxBytes: 10 * 1024 * 1024,
-		DaemonLogBackups:  5,
-		SortColumn:        "name",
-		SortDirection:     "ASC",
+		IndexDBPath:         "index.sqlite",
+		MaxResults:          5000,
+		DebounceMs:          120,
+		ScanBatchSize:       1000,
+		ScanThrottleEvery:   250,
+		ScanThrottleMs:      5,
+		SkipPackageContents: false,
+		DaemonDir:           "daemon",
+		DaemonLogFile:       "daemon.log",
+		DaemonLogLevel:      "info",
+		DaemonLogMaxBytes:   10 * 1024 * 1024,
+		DaemonLogBackups:    5,
+		SortColumn:          "name",
+		SortDirection:       "ASC",
 	}, nil
 }
 

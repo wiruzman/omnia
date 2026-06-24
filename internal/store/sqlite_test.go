@@ -201,6 +201,21 @@ func TestSQLiteStoreMetadataOnlyUpsertKeepsFTSRows(t *testing.T) {
 	}
 }
 
+func TestSQLiteFTSTablesAreContentlessDelete(t *testing.T) {
+	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	for _, table := range []string{"name_fts", "path_fts"} {
+		sql := sqliteCreateSQL(t, st, table)
+		if !strings.Contains(strings.ToLower(sql), "contentless_delete") || !strings.Contains(strings.ToLower(sql), "content=''") {
+			t.Fatalf("expected %s to be contentless-delete FTS, got SQL: %s", table, sql)
+		}
+	}
+}
+
 func TestSQLiteStoreUpsertEntryIfChangedSkipsIdenticalEntry(t *testing.T) {
 	ctx := context.Background()
 	st, err := OpenSQLite(filepath.Join(t.TempDir(), "index.sqlite"))
@@ -235,6 +250,23 @@ func TestSQLiteStoreUpsertEntryIfChangedSkipsIdenticalEntry(t *testing.T) {
 	}
 	if result.Changed || result.Inserted {
 		t.Fatal("expected identical upsert to be skipped")
+	}
+
+	entry.Size = 11
+	entry.ModifiedAt = now.Add(time.Minute)
+	result, err = st.UpsertEntryIfChanged(ctx, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || result.Inserted {
+		t.Fatal("expected metadata-only change to update existing entry")
+	}
+	metadataRes, err := st.Query(ctx, "same", sorter.SortSpec{Column: sorter.SortName, Direction: sorter.Asc}, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metadataRes.Entries) != 1 || metadataRes.Entries[0].Size != 11 {
+		t.Fatalf("expected metadata-only update to preserve FTS row and update size, got %+v", metadataRes.Entries)
 	}
 
 	entry.Name = "changed.txt"
@@ -429,4 +461,24 @@ func sqliteQueryPlanDetails(t *testing.T, st *SQLiteStore, sql string) []string 
 		details = append(details, stmt.ColumnText(3))
 	}
 	return details
+}
+
+func sqliteCreateSQL(t *testing.T, st *SQLiteStore, name string) string {
+	t.Helper()
+	stmt, err := st.db.Prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stmt.Finalize()
+	if err := stmt.BindText(1, name); err != nil {
+		t.Fatal(err)
+	}
+	row, err := stmt.Step()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !row {
+		t.Fatalf("missing sqlite_master row for %s", name)
+	}
+	return stmt.ColumnText(0)
 }

@@ -95,7 +95,7 @@ func New() (*App, error) {
 	}
 	logger := log.New(logFile, "", log.LstdFlags)
 
-	scan := scanner.New(cfg.ExcludeGlobs)
+	scan := scanner.NewWithOptions(cfg.ExcludeGlobs, cfg.SkipPackageContents)
 	idx := indexer.New(cfg, scan, st, logger)
 
 	a := &App{

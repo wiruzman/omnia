@@ -16,6 +16,7 @@ import (
 	"github.com/wiruzman/omnia/internal/indexer"
 	"github.com/wiruzman/omnia/internal/logging"
 	"github.com/wiruzman/omnia/internal/model"
+	"github.com/wiruzman/omnia/internal/procio"
 	"github.com/wiruzman/omnia/internal/progress"
 	"github.com/wiruzman/omnia/internal/scanner"
 	"github.com/wiruzman/omnia/internal/sorter"
@@ -31,6 +32,10 @@ type Service struct {
 	logger         logging.PrintfLogger
 	startupPreview startupPreviewState
 	now            func() time.Time
+
+	lastDiskIO   procio.DiskIO
+	lastDiskIOAt time.Time
+	diskIOStats  daemonstate.DiskIOStats
 }
 
 const watchEventMask = notify.Create | notify.Write | notify.Remove | notify.Rename
@@ -52,7 +57,7 @@ func New(cfg config.Config, logger logging.PrintfLogger) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	scan := scanner.New(cfg.ExcludeGlobs)
+	scan := scanner.NewWithOptions(cfg.ExcludeGlobs, cfg.SkipPackageContents)
 	idx := indexer.New(cfg, scan, st, logger)
 	return &Service{cfg: cfg, store: st, scanner: scan, indexer: idx, logger: logger}, nil
 }
@@ -401,6 +406,7 @@ func (s *Service) applyPathChange(ctx context.Context, path, root string) (pathC
 }
 
 func (s *Service) buildStatus(indexedTotal int, snapshotSeq int64) daemonstate.Status {
+	diskIO := s.sampleDiskIO(time.Now())
 	idx := s.indexer.CurrentStatus()
 	return daemonstate.Status{
 		Running:      true,
@@ -412,7 +418,39 @@ func (s *Service) buildStatus(indexedTotal int, snapshotSeq int64) daemonstate.S
 		LastError:    idx.LastError,
 		IndexedTotal: indexedTotal,
 		SnapshotSeq:  snapshotSeq,
+		DiskIO:       diskIO,
 	}
+}
+
+func (s *Service) sampleDiskIO(now time.Time) daemonstate.DiskIOStats {
+	current, err := procio.Current(os.Getpid())
+	if err != nil {
+		return s.diskIOStats
+	}
+	stats := daemonstate.DiskIOStats{
+		BytesRead:           current.BytesRead,
+		BytesWritten:        current.BytesWritten,
+		LogicalBytesWritten: current.LogicalBytesWritten,
+	}
+	if !s.lastDiskIOAt.IsZero() {
+		elapsed := now.Sub(s.lastDiskIOAt).Seconds()
+		if elapsed > 0 {
+			stats.ReadBytesPerSecond = ratePerSecond(current.BytesRead, s.lastDiskIO.BytesRead, elapsed)
+			stats.WriteBytesPerSecond = ratePerSecond(current.BytesWritten, s.lastDiskIO.BytesWritten, elapsed)
+			stats.LogicalWriteBytesPerSecond = ratePerSecond(current.LogicalBytesWritten, s.lastDiskIO.LogicalBytesWritten, elapsed)
+		}
+	}
+	s.lastDiskIO = current
+	s.lastDiskIOAt = now
+	s.diskIOStats = stats
+	return stats
+}
+
+func ratePerSecond(current, previous uint64, elapsedSeconds float64) float64 {
+	if current < previous || elapsedSeconds <= 0 {
+		return 0
+	}
+	return float64(current-previous) / elapsedSeconds
 }
 
 func (s *Service) writeStatus(st daemonstate.Status) error {
@@ -452,6 +490,9 @@ func (s *Service) shouldTrackPathChange(path string) bool {
 		return false
 	}
 	if s.scanner != nil && s.scanner.ShouldExclude(path) {
+		return false
+	}
+	if s.scanner != nil && s.scanner.ShouldSkipPackageChild(path) {
 		return false
 	}
 	return rootForPath(s.cfg.IncludePaths, path) != ""

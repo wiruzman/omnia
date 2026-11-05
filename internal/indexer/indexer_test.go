@@ -10,11 +10,56 @@ import (
 	"time"
 
 	"github.com/wiruzman/omnia/internal/config"
+	"github.com/wiruzman/omnia/internal/metrics"
 	"github.com/wiruzman/omnia/internal/scanner"
 	"github.com/wiruzman/omnia/internal/sorter"
 	"github.com/wiruzman/omnia/internal/startupcache"
 	"github.com/wiruzman/omnia/internal/store"
 )
+
+func TestReindexMetricsAndRecorderExclusion(t *testing.T) {
+	root := t.TempDir()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.IncludePaths = []string{root}
+	cfg.DaemonDir = filepath.Join(root, ".daemon")
+	cfg.IndexDBPath = filepath.Join(cfg.DaemonDir, "index.sqlite")
+	cfg.MetricsEnabled = true
+	cfg.ScanThrottleMs = 0
+	cfg.ScanBatchSize = 1
+	writeSizedFile(t, filepath.Join(root, "private-file.bin"), 10)
+	st, err := store.OpenSQLite(cfg.IndexDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	counters := &metrics.Counters{}
+	stop := metrics.Start(cfg, counters, nil)
+	defer stop()
+	idx := NewWithMetrics(cfg, scanner.New(nil), st, log.New(io.Discard, "", 0), counters)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := idx.StartReindex(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitForReindex(t, ctx, idx)
+	for counters.Snapshot().ScanActive > 0 && ctx.Err() == nil {
+		time.Sleep(time.Millisecond)
+	}
+	w := counters.Snapshot()
+	if w.ScanRuns != 1 || w.ScanActive != 0 || w.Scanned == 0 || w.ScanSeconds <= 0 || w.PreviewBuilds == 0 || w.ScanFailures != 0 {
+		t.Fatalf("missing scan metrics: %+v", w)
+	}
+	result, err := st.Query(ctx, "metrics-v1", sorter.SortSpec{Column: sorter.SortName, Direction: sorter.Asc}, 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 0 {
+		t.Fatal("metrics recorder files were indexed")
+	}
+}
 
 func TestStartReindexWritesSortedStartupCacheFromScan(t *testing.T) {
 	root := t.TempDir()

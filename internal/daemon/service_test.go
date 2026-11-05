@@ -1,16 +1,22 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/wiruzman/omnia/internal/config"
 	"github.com/wiruzman/omnia/internal/daemonstate"
+	"github.com/wiruzman/omnia/internal/indexer"
+	"github.com/wiruzman/omnia/internal/metrics"
 	"github.com/wiruzman/omnia/internal/model"
 	"github.com/wiruzman/omnia/internal/progress"
 	"github.com/wiruzman/omnia/internal/scanner"
@@ -18,6 +24,414 @@ import (
 	"github.com/wiruzman/omnia/internal/startupcache"
 	"github.com/wiruzman/omnia/internal/store"
 )
+
+func TestMetricsObserveIncrementalWorkWithoutPaths(t *testing.T) {
+	root := t.TempDir()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.IncludePaths = []string{root}
+	cfg.DaemonDir = filepath.Join(root, ".daemon")
+	cfg.IndexDBPath = filepath.Join(cfg.DaemonDir, "index.sqlite")
+	cfg.MetricsEnabled = true
+	cfg.ScanThrottleMs = 0
+	svc, err := New(cfg, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	ctx := context.Background()
+	path := filepath.Join(root, "confidential-project-file.txt")
+	if err := os.WriteFile(path, []byte("private content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	flush := func() {
+		t.Helper()
+		if _, err := svc.flushPending(ctx, map[string]struct{}{path: {}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	flush()
+	flush() // Insert, then unchanged.
+	if err := os.WriteFile(path, []byte("changed private content with different size"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Omnia indexes allocated blocks and whole-second modification times.
+	modified := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, modified, modified); err != nil {
+		t.Fatal(err)
+	}
+	flush()
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	flush()
+	w := svc.metrics.Snapshot()
+	if w.Flushes != 4 || w.Inserted != 1 || w.Updated != 1 || w.Deleted != 1 || w.Unchanged != 1 || w.Failures != 0 || w.FlushSeconds <= 0 {
+		t.Fatalf("incorrect work counts: %+v", w)
+	}
+	if err := svc.publishStartupPreviewCache(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if svc.metrics.Snapshot().PreviewBuilds != 1 {
+		t.Fatal("preview not measured")
+	}
+	stop := metrics.Start(cfg, svc.metrics, nil)
+	stop()
+	files, err := filepath.Glob(filepath.Join(cfg.MetricsDir(), "*.jsonl"))
+	if err != nil || len(files) == 0 {
+		t.Fatal("metrics not recorded")
+	}
+	for _, path := range files {
+		if svc.shouldTrackPathChange(path) {
+			t.Fatal("recorder files would be indexed")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, secret := range []string{"confidential", "private content", root} {
+			if bytes.Contains(data, []byte(secret)) {
+				t.Fatal("context leaked into metrics")
+			}
+		}
+	}
+}
+
+func TestRunningDaemonRecordsEventsAndShutdown(t *testing.T) {
+	root := t.TempDir()
+	// FSEvents reports canonical /private/var paths rather than /var aliases.
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.IncludePaths = []string{root}
+	cfg.MetricsEnabled = true
+	cfg.DaemonDir = filepath.Join(root, ".daemon")
+	cfg.IndexDBPath = filepath.Join(cfg.DaemonDir, "index.sqlite")
+	svc, err := New(cfg, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	seed := filepath.Join(root, "seed.txt")
+	if err := os.WriteFile(seed, []byte("seed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.applyPathChange(context.Background(), seed, root); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var runErr error
+	go func() { runErr = svc.Run(ctx); close(done) }()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("daemon did not stop")
+		}
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	// The watcher is installed after the first status, so retry writes until one is observed.
+	for svc.metrics.Snapshot().Inserted == 0 && time.Now().Before(deadline) {
+		if svc.metrics.Snapshot().EventsAccepted == 0 {
+			if err := os.WriteFile(filepath.Join(root, "new-private-file.txt"), []byte("test"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	w := svc.metrics.Snapshot()
+	if w.Inserted == 0 || w.EventsReceived == 0 || w.EventsAccepted == 0 {
+		t.Fatalf("events not observed: %+v", w)
+	}
+	cancel()
+	select {
+	case <-done:
+		if runErr != nil {
+			t.Fatal(runErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timeout")
+	}
+	files, err := filepath.Glob(filepath.Join(cfg.MetricsDir(), "*.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var final metrics.Record
+	for _, path := range files {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = metrics.ReadRecords(f, func(record metrics.Record) error { final = record; return nil })
+		f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if final.Work.Inserted == 0 || final.Work.Indexed == 0 || final.Work.EventsAccepted == 0 || final.Sequence < 2 {
+		t.Fatalf("shutdown snapshot incomplete: %+v", final)
+	}
+}
+
+type scanCountStore struct {
+	store.Backend
+	calls     atomic.Int32
+	failFirst bool
+}
+
+func (s *scanCountStore) Count(ctx context.Context) (int, error) {
+	if s.calls.Add(1) == 1 && s.failFirst {
+		return 0, errors.New("temporary count failure")
+	}
+	return s.Backend.Count(ctx)
+}
+
+func TestFastScanRefreshesIndexedCount(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		metrics   bool
+		shutdown  bool
+		failFirst bool
+	}{
+		{name: "status and metrics", metrics: true},
+		{name: "metrics disabled"},
+		{name: "shutdown before status tick", metrics: true, shutdown: true},
+		{name: "count failure retries", metrics: true, failFirst: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.Default()
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			cfg.IncludePaths = []string{root}
+			cfg.DaemonDir = filepath.Join(root, ".runtime")
+			cfg.IndexDBPath = filepath.Join(cfg.DaemonDir, "index.sqlite")
+			cfg.MetricsEnabled = tc.metrics
+			cfg.ScanThrottleMs = 0
+			if err := os.WriteFile(filepath.Join(root, "seed.txt"), []byte("fixture"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			svc, err := New(cfg, log.New(io.Discard, "", 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer svc.Close()
+			// Complete the entire scan before any status tick can observe it.
+			// This deterministically reproduces the missed running->idle edge.
+			if err := svc.indexer.StartReindex(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			svc.indexer.Wait()
+			want, err := svc.store.Count(context.Background())
+			if err != nil || want != 2 {
+				t.Fatalf("fixture index: count=%d error=%v", want, err)
+			}
+			if err := daemonstate.Write(cfg.DaemonStatusPath(), daemonstate.Status{IndexedTotal: 123}); err != nil {
+				t.Fatal(err)
+			}
+			counted := &scanCountStore{Backend: svc.store, failFirst: tc.failFirst}
+			svc.store = counted
+			ctx, cancel := context.WithCancel(context.Background())
+			if tc.shutdown {
+				cancel() // No periodic status tick: teardown must reconcile it.
+			}
+			done := make(chan struct{})
+			var runErr error
+			go func() { runErr = svc.Run(ctx); close(done) }()
+			defer func() { cancel(); <-done }()
+			if !tc.shutdown {
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					st, err := daemonstate.Read(cfg.DaemonStatusPath())
+					if err == nil && st.IndexedTotal == want && st.SnapshotSeq == 1 {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("fast scan count not refreshed: status=%+v error=%v", st, err)
+					}
+					if tc.failFirst && counted.calls.Load() == 1 && err == nil && st.IndexedTotal != 123 {
+						t.Fatalf("failed count replaced prior estimate: %+v", st)
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				cancel()
+			}
+			select {
+			case <-done:
+				if runErr != nil {
+					t.Fatal(runErr)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("daemon shutdown timed out")
+			}
+			st, err := daemonstate.Read(cfg.DaemonStatusPath())
+			if err != nil || st.IndexedTotal != want || st.SnapshotSeq != 1 {
+				t.Fatalf("final count: status=%+v error=%v", st, err)
+			}
+			wantCalls := int32(1)
+			if tc.failFirst {
+				wantCalls++
+			}
+			if got := counted.calls.Load(); got != wantCalls {
+				t.Fatalf("recounted completed scan: got=%d want=%d", got, wantCalls)
+			}
+			if tc.metrics {
+				files, err := filepath.Glob(filepath.Join(cfg.MetricsDir(), "*.jsonl"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var final metrics.Record
+				for _, path := range files {
+					f, err := os.Open(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					err = metrics.ReadRecords(f, func(r metrics.Record) error { final = r; return nil })
+					f.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if final.Work.Indexed != uint64(want) || final.Work.ScanActive != 0 {
+					t.Fatalf("final metrics count disagrees with index: %+v", final.Work)
+				}
+			}
+		})
+	}
+}
+
+// Hold scan teardown after cancellation so the shutdown ordering is observable
+// without relying on scanner speed or an artificial multi-second throttle.
+type delayedScanStore struct {
+	store.Backend
+	entered  chan struct{}
+	canceled chan struct{}
+	release  chan struct{}
+}
+
+func (s *delayedScanStore) BeginScan(ctx context.Context, _ int64) error {
+	close(s.entered)
+	<-ctx.Done()
+	close(s.canceled)
+	<-s.release
+	return ctx.Err()
+}
+
+func TestShutdownWaitsForScanCompletionBeforeFinalMetrics(t *testing.T) {
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.IncludePaths = []string{t.TempDir()}
+	cfg.DaemonDir = t.TempDir()
+	cfg.IndexDBPath = filepath.Join(cfg.DaemonDir, "index.sqlite")
+	cfg.MetricsEnabled = true
+	logger := log.New(io.Discard, "", 0)
+	svc, err := New(cfg, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	blocked := &delayedScanStore{Backend: svc.store, entered: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
+	unblock := sync.OnceFunc(func() { close(blocked.release) })
+	defer unblock()
+	svc.store = blocked
+	svc.indexer = indexer.NewWithMetrics(cfg, svc.scanner, blocked, logger, svc.metrics)
+	// Use a separate context: Run must explicitly stop and join its indexer.
+	if err := svc.indexer.StartReindex(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-blocked.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("scan did not start")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var runErr error
+	go func() { runErr = svc.Run(ctx); close(done) }()
+	defer func() {
+		cancel()
+		unblock()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("daemon did not stop")
+		}
+	}()
+	// Wait for the initial record so cancellation cannot coalesce away the
+	// distinction between startup and the final snapshot.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		files, err := filepath.Glob(filepath.Join(cfg.MetricsDir(), "*.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) > 0 {
+			info, err := os.Stat(files[0])
+			if err == nil && info.Size() > 0 {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("initial metrics record not written")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-blocked.canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("shutdown did not cancel the indexer")
+	}
+	if err := svc.indexer.StartReindex(context.Background()); err == nil {
+		t.Fatal("started another scan before canceled scan teardown finished")
+	}
+	select {
+	case <-done:
+		t.Fatalf("Run returned before scan teardown: %v", runErr)
+	default:
+	}
+	unblock()
+	select {
+	case <-done:
+		if runErr != nil {
+			t.Fatal(runErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("shutdown did not finish after scan teardown")
+	}
+	files, err := filepath.Glob(filepath.Join(cfg.MetricsDir(), "*.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var final metrics.Record
+	for _, path := range files {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = metrics.ReadRecords(f, func(r metrics.Record) error { final = r; return nil })
+		f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := svc.metrics.Snapshot()
+	if final.Sequence < 2 || final.Work.ScanRuns != 1 || final.Work.ScanActive != 0 || final.Work.ScanSeconds <= 0 || final.Work.ScanSeconds != want.ScanSeconds || final.Work.ScanFailures != 0 {
+		t.Fatalf("final record missed scan completion: final=%+v counters=%+v", final.Work, want)
+	}
+}
 
 func TestRootForPathPrefersMostSpecificRoot(t *testing.T) {
 	roots := []string{"/Users/demo", "/Users/demo/Projects"}

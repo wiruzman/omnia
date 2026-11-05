@@ -15,6 +15,7 @@ import (
 	"github.com/wiruzman/omnia/internal/daemonstate"
 	"github.com/wiruzman/omnia/internal/indexer"
 	"github.com/wiruzman/omnia/internal/logging"
+	"github.com/wiruzman/omnia/internal/metrics"
 	"github.com/wiruzman/omnia/internal/model"
 	"github.com/wiruzman/omnia/internal/procio"
 	"github.com/wiruzman/omnia/internal/progress"
@@ -32,6 +33,7 @@ type Service struct {
 	logger         logging.PrintfLogger
 	startupPreview startupPreviewState
 	now            func() time.Time
+	metrics        *metrics.Counters
 
 	lastDiskIO   procio.DiskIO
 	lastDiskIOAt time.Time
@@ -58,12 +60,17 @@ func New(cfg config.Config, logger logging.PrintfLogger) (*Service, error) {
 		return nil, err
 	}
 	scan := scanner.NewWithOptions(cfg.ExcludeGlobs, cfg.SkipPackageContents)
-	idx := indexer.New(cfg, scan, st, logger)
-	return &Service{cfg: cfg, store: st, scanner: scan, indexer: idx, logger: logger}, nil
+	var counters *metrics.Counters
+	if cfg.MetricsEnabled {
+		counters = &metrics.Counters{}
+	}
+	idx := indexer.NewWithMetrics(cfg, scan, st, logger, counters)
+	return &Service{cfg: cfg, store: st, scanner: scan, indexer: idx, logger: logger, metrics: counters}, nil
 }
 
 func (s *Service) Close() error {
 	s.indexer.Stop()
+	s.indexer.Wait()
 	return s.store.Close()
 }
 
@@ -75,12 +82,47 @@ func (s *Service) Run(ctx context.Context) error {
 	s.logger.Printf("daemon started | db=%s | status=%s | trigger=%s", s.cfg.IndexDBPath, s.cfg.DaemonStatusPath(), s.cfg.DaemonTriggerPath())
 
 	indexedTotal := s.lastIndexedTotal()
+	s.metrics.SetIndexed(indexedTotal)
+	stopMetrics := metrics.Start(s.cfg, s.metrics, s.logger)
 	snapshotSeq := int64(0)
 	hasWrittenStatus := false
 	lastWrittenStatus := daemonstate.Status{}
 	lastStatusWrite := time.Time{}
 	startupPreviewDirty := false
 	forceStartupPreviewPublish := false
+	lastCountedScan := time.Time{}
+	refreshCompletedScan := func(countCtx context.Context) bool {
+		idx := s.indexer.CurrentStatus()
+		// A scan can start and finish between status ticks. Its completion
+		// timestamp persists even when no tick observed Running=true.
+		if idx.Running || idx.FinishedAt.IsZero() || idx.FinishedAt.Equal(lastCountedScan) {
+			return false
+		}
+		total, err := s.store.Count(countCtx)
+		if err != nil {
+			s.logger.Printf("count after indexing failed: %v", err)
+			return false // Preserve the estimate and retry on the next tick.
+		}
+		indexedTotal = total
+		lastCountedScan = idx.FinishedAt
+		s.metrics.SetIndexed(indexedTotal)
+		snapshotSeq++
+		startupPreviewDirty = true
+		forceStartupPreviewPublish = true
+		s.logger.Printf("indexing finished | total_indexed=%d last_error=%s", total, idx.LastError)
+		return true
+	}
+	defer func() {
+		s.indexer.Stop()
+		s.indexer.Wait()
+		// Reconcile even if shutdown preceded the next status tick. The run
+		// context is canceled, but storage remains open until Run returns.
+		refreshCompletedScan(context.Background())
+		finalStatus := s.buildStatus(indexedTotal, snapshotSeq)
+		finalStatus.Running = false
+		_ = s.writeStatus(finalStatus)
+		stopMetrics()
+	}()
 
 	hasEntries, err := s.store.HasEntries(ctx)
 	if err != nil {
@@ -150,17 +192,16 @@ func (s *Service) Run(ctx context.Context) error {
 					s.logger.Printf("persisted interrupted reindex trigger for next daemon start")
 				}
 			}
-			finalStatus := s.buildStatus(indexedTotal, snapshotSeq)
-			finalStatus.Running = false
-			_ = s.writeStatus(finalStatus)
 			return nil
 		case e := <-events:
 			if e != nil {
 				path := filepath.Clean(e.Path())
-				if s.shouldTrackPathChange(path) {
+				accepted := s.shouldTrackPathChange(path)
+				if accepted {
 					pending[path] = struct{}{}
 					resetTimer(flushTimer, incrementalFlushDebounce)
 				}
+				s.metrics.Event(accepted, len(pending))
 			}
 		case <-flushTimer.C:
 			if s.indexer.IsRunning() {
@@ -173,6 +214,7 @@ func (s *Service) Run(ctx context.Context) error {
 				s.logger.Printf("incremental flush | total=%d upserts=%d deletes=%d skipped=%d failures=%d", stats.Total, stats.Upserts, stats.Deletes, stats.Skipped, stats.Failures)
 				if stats.hasChanges() {
 					indexedTotal = applyIndexDelta(indexedTotal, stats.IndexDelta)
+					s.metrics.SetIndexed(indexedTotal)
 					snapshotSeq++
 					if stats.PreviewRelevant {
 						startupPreviewDirty = true
@@ -231,16 +273,8 @@ func (s *Service) Run(ctx context.Context) error {
 				s.logger.Printf("indexing progress | scanned=%d current=%s", idx.Scanned, trimMiddle(idx.CurrentPath, 90))
 				lastProgressLog = time.Now()
 			}
-			if lastIndexing && !idx.Running {
-				total, _ := s.store.Count(ctx)
-				indexedTotal = total
-				snapshotSeq++
-				startupPreviewDirty = true
-				forceStartupPreviewPublish = true
-				s.logger.Printf("indexing finished | total_indexed=%d last_error=%s", total, idx.LastError)
-				if len(pending) > 0 {
-					resetTimer(flushTimer, incrementalFlushDebounce)
-				}
+			if refreshCompletedScan(ctx) && len(pending) > 0 {
+				resetTimer(flushTimer, incrementalFlushDebounce)
 			}
 			now := s.currentTime()
 			if !idx.Running && s.shouldPublishStartupPreview(startupPreviewDirty, forceStartupPreviewPublish, now) {
@@ -319,6 +353,8 @@ type flushStats struct {
 	Failures        int
 	IndexDelta      int
 	PreviewRelevant bool
+	Inserted        int
+	Unchanged       int
 }
 
 func (s flushStats) hasChanges() bool {
@@ -330,6 +366,7 @@ type pathChangeResult struct {
 	Deleted    int
 	IndexDelta int
 	Entry      model.Entry
+	Unchanged  bool
 }
 
 func (s *Service) flushPending(ctx context.Context, pending map[string]struct{}) (flushStats, error) {
@@ -337,6 +374,12 @@ func (s *Service) flushPending(ctx context.Context, pending map[string]struct{})
 	if len(pending) == 0 {
 		return stats, nil
 	}
+	started := time.Now()
+	defer func() {
+		s.metrics.Flush(stats.Inserted, stats.Upserts-stats.Inserted, stats.Deletes,
+			stats.Unchanged, stats.Skipped-stats.Unchanged, stats.Failures, time.Since(started))
+		s.metrics.SetPending(len(pending))
+	}()
 	paths := make([]string, 0, len(pending))
 	for p := range pending {
 		paths = append(paths, p)
@@ -364,6 +407,7 @@ func (s *Service) flushPending(ctx context.Context, pending map[string]struct{})
 		}
 		if result.Upserted > 0 {
 			stats.Upserts += result.Upserted
+			stats.Inserted += max(result.IndexDelta, 0)
 			stats.IndexDelta += result.IndexDelta
 			if s.entryMayAffectStartupPreview(result.Entry) {
 				stats.PreviewRelevant = true
@@ -371,6 +415,9 @@ func (s *Service) flushPending(ctx context.Context, pending map[string]struct{})
 			continue
 		}
 		stats.Skipped++
+		if result.Unchanged {
+			stats.Unchanged++
+		}
 	}
 	return stats, nil
 }
@@ -396,7 +443,7 @@ func (s *Service) applyPathChange(ctx context.Context, path, root string) (pathC
 		return pathChangeResult{}, err
 	}
 	if !result.Changed {
-		return pathChangeResult{}, nil
+		return pathChangeResult{Unchanged: true}, nil
 	}
 	indexDelta := 0
 	if result.Inserted {
@@ -535,7 +582,9 @@ func (s *Service) shouldPublishStartupPreview(dirty bool, force bool, now time.T
 	return now.Sub(s.startupPreview.publishedAt) >= startupPreviewMinInterval
 }
 
-func (s *Service) publishStartupPreviewCache(ctx context.Context) error {
+func (s *Service) publishStartupPreviewCache(ctx context.Context) (err error) {
+	started := time.Now()
+	defer func() { s.metrics.Preview(time.Since(started), err != nil) }()
 	limit := startupcache.EffectiveLimit(s.cfg.MaxResults)
 	sortSpec := s.startupPreviewSortSpec()
 	res, err := s.store.Preview(ctx, sortSpec, limit)

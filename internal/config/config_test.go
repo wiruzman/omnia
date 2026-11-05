@@ -1,10 +1,43 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestMetricsDefaultsAndOptIn(t *testing.T) {
+	cfg, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MetricsEnabled || cfg.MetricsIntervalSeconds != 60 || cfg.MetricsRetentionDays != 180 || cfg.MetricsMaxBytes != 1<<30 {
+		t.Fatalf("incorrect metrics defaults: %+v", cfg)
+	}
+	if err := json.Unmarshal([]byte(`{"daemon_log_level":"warn"}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MetricsEnabled {
+		t.Fatal("old configs must not opt in")
+	}
+	cfg = normalize(Config{MetricsEnabled: true, MetricsIntervalSeconds: -5, MetricsRetentionDays: -1, MetricsMaxBytes: -1})
+	if !cfg.MetricsEnabled || cfg.MetricsIntervalSeconds != 60 || cfg.MetricsRetentionDays != 180 || cfg.MetricsMaxBytes != 1<<30 {
+		t.Fatal("invalid metrics settings not normalized")
+	}
+	if cfg := normalize(Config{MetricsIntervalSeconds: int(^uint(0) >> 1)}); cfg.MetricsIntervalSeconds != 60 {
+		t.Fatal("interval overflow must not crash the recorder ticker")
+	}
+	for _, days := range []int{30, 90, 180} {
+		cfg = normalize(Config{MetricsIntervalSeconds: 15, MetricsRetentionDays: days, MetricsMaxBytes: 10000, DaemonDir: t.TempDir()})
+		if cfg.MetricsRetentionDays != days || cfg.MetricsIntervalSeconds != 15 || cfg.MetricsMaxBytes != 10000 {
+			t.Fatal("valid metrics settings lost")
+		}
+		if !cfg.IsRuntimePath(filepath.Join(cfg.MetricsDir(), "metrics-v1-2026-10-29-0000.jsonl")) {
+			t.Fatal("metrics would be indexed")
+		}
+	}
+}
 
 func TestNormalizeDefaults(t *testing.T) {
 	cfg := normalize(Config{MaxResults: 0, DebounceMs: 0, ScanBatchSize: 0})

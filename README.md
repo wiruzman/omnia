@@ -117,6 +117,16 @@ If a live query is slow or times out, the app shows no results for that query in
 - The daemon publishes a startup preview cache after indexing snapshots so the TUI can show initial empty-query results quickly.
 - The daemon writes JSON-line logs with severity, pid, and component fields, and rotates them by size for service-mode troubleshooting.
 
+## Optional performance history
+
+Set `metrics_enabled` to `true` in your configuration to record aggregate performance
+metrics locally. Collection is disabled by default and independent of the daemon
+log level. The defaults are one record per minute, 180-day retention, and a 1 GiB
+cap. Records contain no filenames, paths, queries, file hashes, or raw errors.
+The built-in sink writes locally; separate bounded sink queues prepare for future
+exporters, with no network exporter enabled today. See [metrics history](docs/metrics.md) for the
+schema, storage estimates, daily totals, and future Grafana ingestion.
+
 ## Keyboard shortcuts
 
 - Shift+?: show/hide shortcuts
@@ -151,6 +161,10 @@ Key fields:
 - daemon_log_level: minimum daemon log level: debug, info, warn, or error
 - daemon_log_max_bytes: rotate daemon logs after this many bytes
 - daemon_log_backups: number of rotated daemon log files to retain
+- metrics_enabled: opt in to local numeric performance history; defaults to false
+- metrics_interval_seconds: recording interval, minimum 15 seconds; defaults to 60
+- metrics_retention_days: history retention; defaults to 180 days
+- metrics_max_bytes: maximum metrics payload on disk; defaults to 1073741824 (1 GiB)
 - sort_column: one of name, path, size, created, modified
 - sort_direction: ASC or DESC
 - max_results: max rows shown per query

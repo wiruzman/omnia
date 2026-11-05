@@ -14,6 +14,7 @@ import (
 	"github.com/wiruzman/omnia/internal/config"
 	"github.com/wiruzman/omnia/internal/daemonstate"
 	"github.com/wiruzman/omnia/internal/logging"
+	"github.com/wiruzman/omnia/internal/metrics"
 	"github.com/wiruzman/omnia/internal/model"
 	"github.com/wiruzman/omnia/internal/progress"
 	"github.com/wiruzman/omnia/internal/scanner"
@@ -43,11 +44,17 @@ type Indexer struct {
 	status   atomic.Pointer[Status]
 	mu       sync.Mutex
 	cancelFn context.CancelFunc
+	done     chan struct{}
+	metrics  *metrics.Counters
 }
 
 func New(cfg config.Config, scan *scanner.Scanner, st store.Backend, logger logging.PrintfLogger) *Indexer {
+	return NewWithMetrics(cfg, scan, st, logger, nil)
+}
+
+func NewWithMetrics(cfg config.Config, scan *scanner.Scanner, st store.Backend, logger logging.PrintfLogger, counters *metrics.Counters) *Indexer {
 	initial := &Status{}
-	idx := &Indexer{cfg: cfg, scanner: scan, store: st, logger: logger, resumeAt: cfg.DaemonResumeStatePath()}
+	idx := &Indexer{cfg: cfg, scanner: scan, store: st, logger: logger, resumeAt: cfg.DaemonResumeStatePath(), metrics: counters}
 	idx.status.Store(initial)
 	return idx
 }
@@ -73,13 +80,19 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 
 	runCtx, cancel := context.WithCancel(ctx)
 	i.cancelFn = cancel
+	i.done = make(chan struct{})
 	now := time.Now()
 	i.status.Store(&Status{Running: true, StartedAt: now})
+	i.metrics.ScanStarted()
 
 	go func() {
+		var scanned uint64
+		var reported uint64
 		defer func() {
+			i.metrics.ScanFinished(scanned-reported, time.Since(now))
 			i.mu.Lock()
 			i.cancelFn = nil
+			close(i.done)
 			i.mu.Unlock()
 		}()
 
@@ -123,7 +136,10 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 				}
 			}
 			result := startupTop.Result(int(emitted))
-			if err := startupcache.Save(startupcache.Path(i.cfg), sortSpec, startupCacheLimit, result); err != nil {
+			started := time.Now()
+			err := startupcache.Save(startupcache.Path(i.cfg), sortSpec, startupCacheLimit, result)
+			i.metrics.Preview(time.Since(started), err != nil)
+			if err != nil {
 				i.logger.Printf("save startup cache during reindex failed: %v", err)
 				return
 			}
@@ -161,6 +177,11 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 		emit := func(e model.Entry) error {
 			if err := runCtx.Err(); err != nil {
 				return err
+			}
+			scanned++
+			if i.metrics != nil && scanned-reported >= uint64(max(i.cfg.ScanBatchSize, 1)) {
+				i.metrics.AddScanned(scanned - reported)
+				reported = scanned
 			}
 			if buildStartupCache {
 				emitted++
@@ -261,7 +282,17 @@ func (i *Indexer) Stop() {
 	defer i.mu.Unlock()
 	if i.cancelFn != nil {
 		i.cancelFn()
-		i.cancelFn = nil
+	}
+}
+
+// Wait joins the current scan, including its completion metrics. Stop requests
+// cancellation separately so interactive stop requests remain nonblocking.
+func (i *Indexer) Wait() {
+	i.mu.Lock()
+	done := i.done
+	i.mu.Unlock()
+	if done != nil {
+		<-done
 	}
 }
 
@@ -276,6 +307,7 @@ func (i *Indexer) finishWithError(err error) {
 		return
 	}
 	i.logger.Printf("indexing error: %v", err)
+	i.metrics.ScanFailed()
 	st := i.CurrentStatus()
 	st.Running = false
 	st.LastError = err.Error()

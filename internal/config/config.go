@@ -7,25 +7,30 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type Config struct {
-	IncludePaths        []string `json:"include_paths"`
-	ExcludeGlobs        []string `json:"exclude_globs"`
-	IndexDBPath         string   `json:"index_db_path"`
-	MaxResults          int      `json:"max_results"`
-	DebounceMs          int      `json:"debounce_ms"`
-	ScanBatchSize       int      `json:"scan_batch_size"`
-	ScanThrottleEvery   int      `json:"scan_throttle_every"`
-	ScanThrottleMs      int      `json:"scan_throttle_ms"`
-	SkipPackageContents bool     `json:"skip_package_contents"`
-	DaemonDir           string   `json:"daemon_dir"`
-	DaemonLogFile       string   `json:"daemon_log_file"`
-	DaemonLogLevel      string   `json:"daemon_log_level"`
-	DaemonLogMaxBytes   int64    `json:"daemon_log_max_bytes"`
-	DaemonLogBackups    int      `json:"daemon_log_backups"`
-	SortColumn          string   `json:"sort_column"`
-	SortDirection       string   `json:"sort_direction"`
+	IncludePaths           []string `json:"include_paths"`
+	ExcludeGlobs           []string `json:"exclude_globs"`
+	IndexDBPath            string   `json:"index_db_path"`
+	MaxResults             int      `json:"max_results"`
+	DebounceMs             int      `json:"debounce_ms"`
+	ScanBatchSize          int      `json:"scan_batch_size"`
+	ScanThrottleEvery      int      `json:"scan_throttle_every"`
+	ScanThrottleMs         int      `json:"scan_throttle_ms"`
+	SkipPackageContents    bool     `json:"skip_package_contents"`
+	DaemonDir              string   `json:"daemon_dir"`
+	DaemonLogFile          string   `json:"daemon_log_file"`
+	DaemonLogLevel         string   `json:"daemon_log_level"`
+	DaemonLogMaxBytes      int64    `json:"daemon_log_max_bytes"`
+	DaemonLogBackups       int      `json:"daemon_log_backups"`
+	MetricsEnabled         bool     `json:"metrics_enabled"`
+	MetricsIntervalSeconds int      `json:"metrics_interval_seconds"`
+	MetricsRetentionDays   int      `json:"metrics_retention_days"`
+	MetricsMaxBytes        int64    `json:"metrics_max_bytes"`
+	SortColumn             string   `json:"sort_column"`
+	SortDirection          string   `json:"sort_direction"`
 }
 
 func configDir() (string, error) {
@@ -55,20 +60,23 @@ func Default() (Config, error) {
 			".Trash",
 			"Trash",
 		},
-		IndexDBPath:         "index.sqlite",
-		MaxResults:          5000,
-		DebounceMs:          120,
-		ScanBatchSize:       1000,
-		ScanThrottleEvery:   250,
-		ScanThrottleMs:      5,
-		SkipPackageContents: false,
-		DaemonDir:           "daemon",
-		DaemonLogFile:       "daemon.log",
-		DaemonLogLevel:      "info",
-		DaemonLogMaxBytes:   10 * 1024 * 1024,
-		DaemonLogBackups:    5,
-		SortColumn:          "name",
-		SortDirection:       "ASC",
+		IndexDBPath:            "index.sqlite",
+		MaxResults:             5000,
+		DebounceMs:             120,
+		ScanBatchSize:          1000,
+		ScanThrottleEvery:      250,
+		ScanThrottleMs:         5,
+		SkipPackageContents:    false,
+		DaemonDir:              "daemon",
+		DaemonLogFile:          "daemon.log",
+		DaemonLogLevel:         "info",
+		DaemonLogMaxBytes:      10 * 1024 * 1024,
+		DaemonLogBackups:       5,
+		MetricsIntervalSeconds: 60,
+		MetricsRetentionDays:   180,
+		MetricsMaxBytes:        1 << 30,
+		SortColumn:             "name",
+		SortDirection:          "ASC",
 	}, nil
 }
 
@@ -123,6 +131,15 @@ func Save(path string, cfg Config) error {
 }
 
 func normalize(cfg Config) Config {
+	if cfg.MetricsIntervalSeconds < 15 || int64(cfg.MetricsIntervalSeconds) > (1<<63-1)/int64(time.Second) {
+		cfg.MetricsIntervalSeconds = 60
+	}
+	if cfg.MetricsRetentionDays <= 0 {
+		cfg.MetricsRetentionDays = 180
+	}
+	if cfg.MetricsMaxBytes <= 0 {
+		cfg.MetricsMaxBytes = 1 << 30
+	}
 	if cfg.MaxResults <= 0 {
 		cfg.MaxResults = 5000
 	}
@@ -252,6 +269,10 @@ func coerceSQLiteIndexPath(path string) string {
 
 func (c Config) DaemonStatusPath() string {
 	return filepath.Join(c.DaemonDir, "status.json")
+}
+
+func (c Config) MetricsDir() string {
+	return filepath.Join(c.DaemonDir, "metrics")
 }
 
 func (c Config) DaemonTriggerPath() string {

@@ -130,6 +130,11 @@ and honors cancellation. Existing entries beneath unreadable paths are preserved
 using the same scan marker, including across interruption/resume; intentionally
 excluded or genuinely missing paths remain eligible for cleanup.
 
+Full scans default to 16,384 entries per transaction. Explicit `scan_batch_size`
+values are honored, including existing configurations set to 1,000. Resume cursors
+are saved only after database commits, not UI progress updates. Legacy checkpoint
+files without a committed cursor restart with a fresh scan ID for safety.
+
 ## Optional performance history
 
 Set `metrics_enabled` to `true` in your configuration to record aggregate performance

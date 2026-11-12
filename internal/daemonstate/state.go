@@ -34,10 +34,12 @@ type DiskIOStats struct {
 }
 
 type ReindexResumeState struct {
-	ScanID      int64     `json:"scan_id"`
-	Root        string    `json:"root"`
-	CurrentPath string    `json:"current_path"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ScanID      int64  `json:"scan_id"`
+	Root        string `json:"root"`
+	CurrentPath string `json:"current_path"`
+	// Committed qualifies CurrentPath as a durable cursor, not merely UI progress.
+	Committed bool      `json:"committed,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func Read(path string) (Status, error) {

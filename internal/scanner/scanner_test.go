@@ -3,6 +3,7 @@ package scanner
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -142,6 +143,64 @@ func TestWalkWithOptionsResumesFromRootAndPath(t *testing.T) {
 	sort.Strings(files)
 	if len(files) != 1 || files[0] != "c.txt" {
 		t.Fatalf("expected only c.txt after resume, got %+v", files)
+	}
+}
+
+func TestWalkResumeMatchesTraversalOrder(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a/file", "a/sub/file", "a-b", "a.txt", "a.more/file", "b/file"} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var paths []string
+	s := New(nil)
+	if err := s.Walk([]string{root}, func(e model.Entry) error {
+		paths = append(paths, e.Path)
+		return nil
+	}, nil, func(error) {}); err != nil {
+		t.Fatal(err)
+	}
+	for i, cursor := range paths {
+		name, err := filepath.Rel(root, cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Run(name, func(t *testing.T) {
+			var got []string
+			if err := s.WalkWithOptions([]string{root}, func(e model.Entry) error {
+				got = append(got, e.Path)
+				return nil
+			}, nil, func(error) {}, WalkOptions{ResumeRoot: root, ResumeAfterPath: cursor}); err != nil {
+				t.Fatal(err)
+			}
+			if want := paths[i+1:]; !slices.Equal(got, want) {
+				t.Fatalf("resume order differs from uninterrupted walk: got %v want %v", got, want)
+			}
+		})
+	}
+	// A cursor can disappear while the daemon is stopped. Later siblings must
+	// still be scanned without waiting to encounter the exact cursor again.
+	cursor := filepath.Join(root, "a", "sub", "file")
+	if err := os.Remove(cursor); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Dir(cursor)); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	if err := s.WalkWithOptions([]string{root}, func(e model.Entry) error {
+		got = append(got, e.Path)
+		return nil
+	}, nil, func(error) {}, WalkOptions{ResumeRoot: root, ResumeAfterPath: cursor}); err != nil {
+		t.Fatal(err)
+	}
+	if want := paths[slices.Index(paths, cursor)+1:]; !slices.Equal(got, want) {
+		t.Fatalf("missing cursor skipped later siblings: got %v want %v", got, want)
 	}
 }
 

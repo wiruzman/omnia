@@ -202,7 +202,7 @@ func TestUnreadableProtectionResumesAtDirectoryCheckpoint(t *testing.T) {
 	if err := st.UpsertBatch(ctx, 2, []model.Entry{root}); err != nil {
 		t.Fatal(err)
 	}
-	if err := daemonstate.WriteResumeState(cfg.DaemonResumeStatePath(), daemonstate.ReindexResumeState{ScanID: 2, Root: cfg.IncludePaths[0], CurrentPath: blocked}); err != nil {
+	if err := daemonstate.WriteResumeState(cfg.DaemonResumeStatePath(), daemonstate.ReindexResumeState{ScanID: 2, Root: cfg.IncludePaths[0], CurrentPath: blocked, Committed: true}); err != nil {
 		t.Fatal(err)
 	}
 	idx := New(cfg, scanner.New(nil), st, log.New(io.Discard, "", 0))

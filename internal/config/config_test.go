@@ -130,6 +130,9 @@ func TestLoadResolvesRelativeRuntimePaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
+	if cfg.ScanBatchSize != 10 {
+		t.Fatalf("explicit batch size changed: %d", cfg.ScanBatchSize)
+	}
 
 	configBase := filepath.Join(home, ".config", "omnia-search")
 	if cfg.IndexDBPath != filepath.Join(configBase, "index.sqlite") {
@@ -143,6 +146,21 @@ func TestLoadResolvesRelativeRuntimePaths(t *testing.T) {
 	}
 	if len(cfg.IncludePaths) == 0 || cfg.IncludePaths[0] != filepath.Clean(home) {
 		t.Fatalf("expected home include path to be injected, got %v", cfg.IncludePaths)
+	}
+}
+
+func TestScanBatchDefaultAndExplicitOverrides(t *testing.T) {
+	cfg, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ScanBatchSize != 16384 || normalize(Config{}).ScanBatchSize != 16384 {
+		t.Fatal("measured full-scan default not applied")
+	}
+	for _, n := range []int{1, 64, 1000, 8192} {
+		if got := normalize(Config{ScanBatchSize: n}).ScanBatchSize; got != n {
+			t.Fatalf("explicit batch %d changed to %d", n, got)
+		}
 	}
 }
 

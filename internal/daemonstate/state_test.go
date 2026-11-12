@@ -14,7 +14,7 @@ func TestResumeStateLifecycle(t *testing.T) {
 		t.Fatalf("expected not exist before write, got %v", err)
 	}
 
-	if err := WriteResumeState(path, ReindexResumeState{ScanID: 42, Root: "/root", CurrentPath: "/root/a.txt"}); err != nil {
+	if err := WriteResumeState(path, ReindexResumeState{ScanID: 42, Root: "/root", CurrentPath: "/root/a.txt", Committed: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -22,7 +22,7 @@ func TestResumeStateLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.ScanID != 42 || st.Root != "/root" || st.CurrentPath != "/root/a.txt" {
+	if st.ScanID != 42 || st.Root != "/root" || st.CurrentPath != "/root/a.txt" || !st.Committed {
 		t.Fatalf("unexpected resume state %+v", st)
 	}
 	if st.UpdatedAt.IsZero() {
@@ -38,6 +38,17 @@ func TestResumeStateLifecycle(t *testing.T) {
 
 	if err := ClearResumeState(path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLegacyResumeStateIsNotCommitQualified(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "resume.json")
+	if err := os.WriteFile(path, []byte(`{"scan_id":42,"root":"/root","current_path":"/root/a.txt"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := ReadResumeState(path)
+	if err != nil || st.Committed || st.ScanID != 42 {
+		t.Fatalf("legacy checkpoint: %+v err=%v", st, err)
 	}
 }
 

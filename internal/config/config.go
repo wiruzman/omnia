@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// DefaultScanBatchSize amortizes marker/index writes while keeping full scans bounded.
+const DefaultScanBatchSize = 16 * 1024
+
 type Config struct {
 	IncludePaths           []string `json:"include_paths"`
 	ExcludeGlobs           []string `json:"exclude_globs"`
@@ -63,7 +66,7 @@ func Default() (Config, error) {
 		IndexDBPath:            "index.sqlite",
 		MaxResults:             5000,
 		DebounceMs:             120,
-		ScanBatchSize:          1000,
+		ScanBatchSize:          DefaultScanBatchSize,
 		ScanThrottleEvery:      250,
 		ScanThrottleMs:         5,
 		SkipPackageContents:    false,
@@ -147,7 +150,7 @@ func normalize(cfg Config) Config {
 		cfg.DebounceMs = 120
 	}
 	if cfg.ScanBatchSize <= 0 {
-		cfg.ScanBatchSize = 1000
+		cfg.ScanBatchSize = DefaultScanBatchSize
 	}
 	if cfg.ScanThrottleEvery <= 0 {
 		cfg.ScanThrottleEvery = 250

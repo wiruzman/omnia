@@ -175,7 +175,7 @@ func (s *Scanner) WalkWithOptions(roots []string, emit func(model.Entry) error, 
 				return nil
 			}
 
-			if currentResumeAfter != "" && abs <= currentResumeAfter {
+			if currentResumeAfter != "" && compareWalkPaths(abs, currentResumeAfter) <= 0 {
 				if d.IsDir() {
 					cursorPrefix := currentResumeAfter + string(os.PathSeparator)
 					dirPrefix := abs + string(os.PathSeparator)
@@ -247,6 +247,21 @@ func (s *Scanner) WalkWithOptions(roots []string, emit func(model.Entry) error, 
 		progress(Progress{Scanned: scanned})
 	}
 	return nil
+}
+
+// compareWalkPaths matches WalkDir's depth-first, name-sorted order: ancestors
+// precede descendants, and each sibling name is compared before its children.
+// Raw path comparison incorrectly puts "a-b" before "a/file".
+func compareWalkPaths(a, b string) int {
+	for a != "" && b != "" {
+		partA, restA, _ := strings.Cut(a, string(os.PathSeparator))
+		partB, restB, _ := strings.Cut(b, string(os.PathSeparator))
+		if cmp := strings.Compare(partA, partB); cmp != 0 {
+			return cmp
+		}
+		a, b = restA, restB
+	}
+	return strings.Compare(a, b)
 }
 
 func (o WalkOptions) unreadable(path string, err error) error {

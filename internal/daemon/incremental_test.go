@@ -321,7 +321,7 @@ func TestOverflowReconciliationDoesNotResumePastLostPaths(t *testing.T) {
 	if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := daemonstate.WriteResumeState(svc.cfg.DaemonResumeStatePath(), daemonstate.ReindexResumeState{ScanID: 1, Root: root, CurrentPath: filepath.Join(root, "zzzz")}); err != nil {
+	if err := daemonstate.WriteResumeState(svc.cfg.DaemonResumeStatePath(), daemonstate.ReindexResumeState{ScanID: 1, Root: root, CurrentPath: filepath.Join(root, "zzzz"), Committed: true}); err != nil {
 		t.Fatal(err)
 	}
 	w.lost()

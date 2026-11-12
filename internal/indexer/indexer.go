@@ -108,13 +108,19 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 			},
 		}
 		resume, err := daemonstate.ReadResumeState(i.resumeAt)
-		if err == nil && resume.ScanID > 0 {
+		checkpoint := daemonstate.ReindexResumeState{ScanID: scanID}
+		if err == nil && resume.ScanID > 0 && resume.Committed {
 			scanID = resume.ScanID
+			checkpoint = resume
 			walkOptions.ResumeRoot = resume.Root
 			walkOptions.ResumeAfterPath = resume.CurrentPath
 			i.logger.Printf("resuming reindex | scan_id=%d root=%s path=%s", scanID, resume.Root, resume.CurrentPath)
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 			i.logger.Printf("resume state read failed: %v", err)
+		} else if err == nil && resume.ScanID > 0 {
+			// Older checkpoints could run ahead of a database commit. A fresh
+			// scan ID avoids both skipping entries and retaining stale markers.
+			i.logger.Printf("restarting reindex from an uncommitted checkpoint")
 		}
 
 		buildStartupCache := walkOptions.ResumeRoot == "" && walkOptions.ResumeAfterPath == ""
@@ -156,8 +162,9 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 			i.finishWithError(err)
 			return
 		}
-		if err := daemonstate.WriteResumeState(i.resumeAt, daemonstate.ReindexResumeState{ScanID: scanID}); err != nil {
-			i.logger.Printf("resume state write failed: %v", err)
+		if err := daemonstate.WriteResumeState(i.resumeAt, checkpoint); err != nil {
+			i.finishWithError(fmt.Errorf("write initial checkpoint: %w", err))
+			return
 		}
 
 		estimatedByRoot, err := i.store.CountByRoots(runCtx, i.cfg.IncludePaths)
@@ -178,13 +185,35 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 			}
 		}
 
-		batch := make([]model.Entry, 0, i.cfg.ScanBatchSize)
+		batchSize := i.cfg.ScanBatchSize
+		if batchSize <= 0 {
+			batchSize = config.DefaultScanBatchSize
+		}
+		batch := make([]model.Entry, 0, batchSize)
+		flushBatch := func() error {
+			if len(batch) == 0 {
+				return nil
+			}
+			if err := i.store.UpsertBatch(runCtx, scanID, batch); err != nil {
+				return err
+			}
+			last := batch[len(batch)-1]
+			// UI progress may lead buffered writes; durable resume progress must
+			// follow the successful commit, including partial and cross-root batches.
+			if err := daemonstate.WriteResumeState(i.resumeAt, daemonstate.ReindexResumeState{
+				ScanID: scanID, Root: last.RootPath, CurrentPath: last.Path, Committed: true,
+			}); err != nil {
+				return fmt.Errorf("write committed checkpoint: %w", err)
+			}
+			batch = batch[:0]
+			return nil
+		}
 		emit := func(e model.Entry) error {
 			if err := runCtx.Err(); err != nil {
 				return err
 			}
 			scanned++
-			if i.metrics != nil && scanned-reported >= uint64(max(i.cfg.ScanBatchSize, 1)) {
+			if i.metrics != nil && scanned-reported >= uint64(batchSize) {
 				i.metrics.AddScanned(scanned - reported)
 				reported = scanned
 			}
@@ -194,15 +223,11 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 				saveStartupCache(false)
 			}
 			batch = append(batch, e)
-			if len(batch) >= i.cfg.ScanBatchSize {
-				if err := i.store.UpsertBatch(runCtx, scanID, batch); err != nil {
-					return err
-				}
-				batch = batch[:0]
+			if len(batch) >= batchSize {
+				return flushBatch()
 			}
 			return nil
 		}
-		lastRoot := walkOptions.ResumeRoot
 		onProgress := func(p scanner.Progress) {
 			st := i.CurrentStatus()
 			st.Scanned = p.Scanned
@@ -210,7 +235,6 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 				st.CurrentPath = p.Current
 			}
 			if p.Root != "" {
-				lastRoot = p.Root
 				cleanRoot := filepath.Clean(p.Root)
 				row := pathProgress[cleanRoot]
 				if row.Root == "" {
@@ -234,16 +258,6 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 			})
 			st.PathProgress = rows
 			i.status.Store(&st)
-
-			if p.Current != "" {
-				if err := daemonstate.WriteResumeState(i.resumeAt, daemonstate.ReindexResumeState{
-					ScanID:      scanID,
-					Root:        filepath.Clean(lastRoot),
-					CurrentPath: p.Current,
-				}); err != nil {
-					i.logger.Printf("resume state write failed: %v", err)
-				}
-			}
 		}
 		onWarn := func(err error) {
 			i.logger.Printf("scanner warning: %v", err)
@@ -254,11 +268,9 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 			i.finishWithError(err)
 			return
 		}
-		if len(batch) > 0 {
-			if err := i.store.UpsertBatch(runCtx, scanID, batch); err != nil {
-				i.finishWithError(err)
-				return
-			}
+		if err := flushBatch(); err != nil {
+			i.finishWithError(err)
+			return
 		}
 		saveStartupCache(true)
 		if err := i.store.CleanupStale(runCtx, scanID, i.cfg.IncludePaths); err != nil {

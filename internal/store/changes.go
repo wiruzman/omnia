@@ -15,6 +15,7 @@ import (
 type entryWriter struct {
 	lookup                 *sqliteStmt
 	insert, update         *sqliteStmt
+	seen                   *sqliteStmt
 	deleteName, deletePath *sqliteStmt
 	insertName, insertPath *sqliteStmt
 	prefixes, deleteEntry  *sqliteStmt
@@ -30,6 +31,7 @@ func newEntryWriter(db *sqliteDB) (*entryWriter, error) {
 		{&w.lookup, "SELECT rowid, path, name, parent_path, root_path, type, size, created_at, modified_at FROM entries WHERE path = ?;"},
 		{&w.insert, `INSERT INTO entries (path, path_lower, name, name_lower, parent_path, root_path, type, size, created_at, modified_at, last_seen_scan) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`},
 		{&w.update, `UPDATE entries SET path_lower = ?, name = ?, name_lower = ?, parent_path = ?, root_path = ?, type = ?, size = ?, created_at = ?, modified_at = ?, last_seen_scan = ? WHERE rowid = ?;`},
+		{&w.seen, "UPDATE entries SET last_seen_scan = ? WHERE rowid = ? AND last_seen_scan != ?;"},
 		{&w.deleteName, "DELETE FROM name_fts WHERE rowid = ?;"},
 		{&w.deletePath, "DELETE FROM path_fts WHERE rowid = ?;"},
 		{&w.insertName, "INSERT INTO name_fts(rowid, name_lower) VALUES (?, ?);"},
@@ -59,8 +61,11 @@ func (w *entryWriter) upsert(entry model.Entry, scanID int64, skipUnchanged bool
 	if err != nil {
 		return UpsertEntryResult{}, err
 	}
-	if exists && skipUnchanged && sameIndexedEntry(existing, entry) {
-		return UpsertEntryResult{}, nil
+	if exists && sameIndexedEntry(existing, entry) {
+		if skipUnchanged {
+			return UpsertEntryResult{}, nil
+		}
+		return UpsertEntryResult{}, w.markSeen(rowID, scanID)
 	}
 	refreshFTS := !exists || entryNeedsFTSRefresh(existing, entry)
 	if exists {
@@ -92,6 +97,20 @@ func (w *entryWriter) upsert(entry model.Entry, scanID int64, skipUnchanged bool
 		}
 	}
 	return UpsertEntryResult{Changed: true, Inserted: !exists}, nil
+}
+
+func (w *entryWriter) markSeen(rowID, scanID int64) error {
+	defer w.seen.Reset()
+	if err := w.seen.BindInt64(1, scanID); err != nil {
+		return err
+	}
+	if err := w.seen.BindInt64(2, rowID); err != nil {
+		return err
+	}
+	if err := w.seen.BindInt64(3, scanID); err != nil {
+		return err
+	}
+	return w.seen.StepDone()
 }
 
 func (w *entryWriter) remove(path string, limit int) (ChangeResult, error) {

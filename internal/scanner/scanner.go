@@ -31,7 +31,10 @@ type WalkOptions struct {
 	ThrottleEvery   int
 	ThrottleDelay   time.Duration
 	SkipPath        func(string) bool
-	throttleSleep   func(time.Duration)
+	// OnUnreadable preserves paths that could not be inspected, unlike explicit
+	// exclusions or missing paths. Returning an error aborts the scan safely.
+	OnUnreadable  func(string) error
+	throttleSleep func(time.Duration)
 }
 
 func New(excludes []string) *Scanner {
@@ -134,6 +137,9 @@ func (s *Scanner) WalkWithOptions(roots []string, emit func(model.Entry) error, 
 		}
 		if _, err := os.Stat(root); err != nil {
 			onWarn(fmt.Errorf("skip missing root %s: %w", root, err))
+			if err := options.unreadable(root, err); err != nil {
+				return err
+			}
 			continue
 		}
 		currentResumeAfter := ""
@@ -143,6 +149,9 @@ func (s *Scanner) WalkWithOptions(roots []string, emit func(model.Entry) error, 
 
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
+				if preserveErr := options.unreadable(path, err); preserveErr != nil {
+					return preserveErr
+				}
 				if errors.Is(err, fs.ErrPermission) {
 					onWarn(fmt.Errorf("permission denied %s", path))
 					return fs.SkipDir
@@ -153,6 +162,9 @@ func (s *Scanner) WalkWithOptions(roots []string, emit func(model.Entry) error, 
 			abs, err := filepath.Abs(path)
 			if err != nil {
 				onWarn(fmt.Errorf("abs path error %s: %w", path, err))
+				if err := options.unreadable(path, err); err != nil {
+					return err
+				}
 				return nil
 			}
 
@@ -184,6 +196,9 @@ func (s *Scanner) WalkWithOptions(roots []string, emit func(model.Entry) error, 
 			info, err := d.Info()
 			if err != nil {
 				onWarn(fmt.Errorf("stat error %s: %w", abs, err))
+				if err := options.unreadable(abs, err); err != nil {
+					return err
+				}
 				return nil
 			}
 
@@ -232,6 +247,17 @@ func (s *Scanner) WalkWithOptions(roots []string, emit func(model.Entry) error, 
 		progress(Progress{Scanned: scanned})
 	}
 	return nil
+}
+
+func (o WalkOptions) unreadable(path string, err error) error {
+	if o.OnUnreadable == nil || errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		return nil
+	}
+	abs, absErr := filepath.Abs(path)
+	if absErr != nil {
+		return absErr
+	}
+	return o.OnUnreadable(abs)
 }
 
 func (o WalkOptions) throttle(scanned int64) {

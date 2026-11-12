@@ -101,6 +101,11 @@ func (i *Indexer) StartReindex(ctx context.Context) error {
 			ThrottleEvery: i.cfg.ScanThrottleEvery,
 			ThrottleDelay: time.Duration(i.cfg.ScanThrottleMs) * time.Millisecond,
 			SkipPath:      i.cfg.IsRuntimePath,
+			OnUnreadable: func(path string) error {
+				// Store protection with the scan marker itself, so it survives
+				// interruption/resume without a second path-history file.
+				return i.store.MarkSubtreeSeen(runCtx, scanID, path)
+			},
 		}
 		resume, err := daemonstate.ReadResumeState(i.resumeAt)
 		if err == nil && resume.ScanID > 0 {

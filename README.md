@@ -124,6 +124,12 @@ bounded. Overflow requests a full reconciliation instead of silently losing
 changes. Directory creation and moves discover only their affected subtree. The
 native macOS watcher keeps no lifetime history of observed paths.
 
+Full scans refresh only the scan marker for unchanged entries, avoiding metadata
+and search-index churn. Stale-entry cleanup commits in batches of at most 16,384 rows
+and honors cancellation. Existing entries beneath unreadable paths are preserved
+using the same scan marker, including across interruption/resume; intentionally
+excluded or genuinely missing paths remain eligible for cleanup.
+
 ## Optional performance history
 
 Set `metrics_enabled` to `true` in your configuration to record aggregate performance

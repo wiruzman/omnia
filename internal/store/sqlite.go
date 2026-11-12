@@ -100,54 +100,6 @@ func (s *SQLiteStore) UpsertBatch(ctx context.Context, scanID int64, batch []mod
 	})
 }
 
-func (s *SQLiteStore) CleanupStale(ctx context.Context, scanID int64, roots []string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	selectStmt, err := s.db.Prepare("SELECT rowid FROM entries WHERE root_path = ? AND last_seen_scan != ?;")
-	if err != nil {
-		return err
-	}
-	defer selectStmt.Finalize()
-
-	deleteNameStmt, err := s.db.Prepare("DELETE FROM name_fts WHERE rowid = ?;")
-	if err != nil {
-		return err
-	}
-	defer deleteNameStmt.Finalize()
-
-	deletePathStmt, err := s.db.Prepare("DELETE FROM path_fts WHERE rowid = ?;")
-	if err != nil {
-		return err
-	}
-	defer deletePathStmt.Finalize()
-
-	deleteEntryStmt, err := s.db.Prepare("DELETE FROM entries WHERE rowid = ?;")
-	if err != nil {
-		return err
-	}
-	defer deleteEntryStmt.Finalize()
-
-	return s.db.WithTx(func() error {
-		for _, root := range roots {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			rowIDs, err := selectStaleRowIDs(selectStmt, filepath.Clean(root), scanID)
-			if err != nil {
-				return err
-			}
-			for _, rowID := range rowIDs {
-				if err := deleteRowByID(deleteNameStmt, deletePathStmt, deleteEntryStmt, rowID); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
-}
-
 func (s *SQLiteStore) Count(ctx context.Context) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -856,17 +808,6 @@ func sameIndexedEntry(a, b model.Entry) bool {
 func entryNeedsFTSRefresh(a, b model.Entry) bool {
 	return strings.ToLower(filepath.Clean(a.Path)) != strings.ToLower(filepath.Clean(b.Path)) ||
 		strings.ToLower(a.Name) != strings.ToLower(b.Name)
-}
-
-func selectStaleRowIDs(stmt *sqliteStmt, root string, scanID int64) ([]int64, error) {
-	defer stmt.Reset()
-	if err := stmt.BindText(1, root); err != nil {
-		return nil, err
-	}
-	if err := stmt.BindInt64(2, scanID); err != nil {
-		return nil, err
-	}
-	return collectRowIDs(stmt)
 }
 
 func selectRowIDs(stmt *sqliteStmt, args []any) ([]int64, error) {

@@ -117,6 +117,13 @@ If a live query is slow or times out, the app shows no results for that query in
 - The daemon publishes a startup preview cache after indexing snapshots so the TUI can show initial empty-query results quickly.
 - The daemon writes JSON-line logs with severity, pid, and component fields, and rotates them by size for service-mode troubleshooting.
 
+Incremental indexing keeps the three-second quiet-period debounce, with a
+ten-second maximum scheduling delay when indexing is available. Each incremental
+transaction processes at most 128 indexed-entry changes; delivery and pending paths are
+bounded. Overflow requests a full reconciliation instead of silently losing
+changes. Directory creation and moves discover only their affected subtree. The
+native macOS watcher keeps no lifetime history of observed paths.
+
 ## Optional performance history
 
 Set `metrics_enabled` to `true` in your configuration to record aggregate performance

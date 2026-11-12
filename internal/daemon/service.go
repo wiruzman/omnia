@@ -3,13 +3,13 @@ package daemon
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"syscall"
 	"time"
-
-	"github.com/rjeczalik/notify"
 
 	"github.com/wiruzman/omnia/internal/config"
 	"github.com/wiruzman/omnia/internal/daemonstate"
@@ -34,16 +34,18 @@ type Service struct {
 	startupPreview startupPreviewState
 	now            func() time.Time
 	metrics        *metrics.Counters
+	watcher        *fileWatcher // Run owns it; tests may supply an isolated event source.
 
 	lastDiskIO   procio.DiskIO
 	lastDiskIOAt time.Time
 	diskIOStats  daemonstate.DiskIOStats
 }
 
-const watchEventMask = notify.Create | notify.Write | notify.Remove | notify.Rename
-
 const statusHeartbeatInterval = 15 * time.Second
 const incrementalFlushDebounce = 3 * time.Second
+const incrementalFlushMaxAge = 10 * time.Second
+const incrementalBatchSize = 128
+const pendingCapacity = 8192
 const startupPreviewMinInterval = time.Minute
 
 type startupPreviewState struct {
@@ -91,12 +93,18 @@ func (s *Service) Run(ctx context.Context) error {
 	startupPreviewDirty := false
 	forceStartupPreviewPublish := false
 	lastCountedScan := time.Time{}
+	reconcileRequested, reconciling := false, false
 	refreshCompletedScan := func(countCtx context.Context) bool {
 		idx := s.indexer.CurrentStatus()
 		// A scan can start and finish between status ticks. Its completion
 		// timestamp persists even when no tick observed Running=true.
 		if idx.Running || idx.FinishedAt.IsZero() || idx.FinishedAt.Equal(lastCountedScan) {
 			return false
+		}
+		if reconciling {
+			reconciling = false
+			// Failed recovery must not silently consume the overflow request.
+			reconcileRequested = reconcileRequested || idx.LastError != ""
 		}
 		total, err := s.store.Count(countCtx)
 		if err != nil {
@@ -157,18 +165,18 @@ func (s *Service) Run(ctx context.Context) error {
 		s.logger.Printf("skipping startup preview cache publish while initial indexing is running")
 	}
 
-	events := make(chan notify.EventInfo, 8192)
-	for _, root := range s.cfg.IncludePaths {
-		watchPath := filepath.Clean(root) + "/..."
-		if err := notify.Watch(watchPath, events, watchEventMask); err != nil {
-			s.logger.Printf("watch setup failed for %s: %v", root, err)
-		} else {
-			s.logger.Printf("watching %s", watchPath)
+	watcher := s.watcher
+	if watcher == nil {
+		watcher, err = newFileWatcher(s.cfg.IncludePaths, s.shouldTrackPathChange, s.metrics)
+		if err != nil {
+			return err
 		}
 	}
-	defer notify.Stop(events)
+	defer watcher.Close()
 
-	pending := make(map[string]struct{}, 4096)
+	pending := make(map[string]bool) // True requests bounded descendant discovery.
+	var firstPending time.Time
+	draining := false
 	flushTimer := time.NewTimer(time.Hour)
 	stopTimer(flushTimer)
 	statusTicker := time.NewTicker(1 * time.Second)
@@ -176,6 +184,14 @@ func (s *Service) Run(ctx context.Context) error {
 	defer flushTimer.Stop()
 	defer statusTicker.Stop()
 	defer triggerTicker.Stop()
+	requestReconcile := func() {
+		reconcileRequested = true
+		pending = make(map[string]bool) // Release keys and old map capacity.
+		firstPending = time.Time{}
+		draining = false
+		stopTimer(flushTimer)
+		s.metrics.SetPending(0)
+	}
 
 	lastIndexing := s.indexer.IsRunning()
 	lastProgressLog := time.Now()
@@ -185,7 +201,15 @@ func (s *Service) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			s.logger.Printf("shutdown requested, stopping daemon")
-			if s.indexer.IsRunning() {
+			// Stop callbacks before checking unconsumed work for next-start recovery.
+			watcher.Close()
+			needsFresh := pendingFreshStart || reconcileRequested || reconciling || len(pending) > 0 || len(watcher.events) > 0 || len(watcher.overflow) > 0
+			if needsFresh {
+				if err := daemonstate.RequestFreshReindex(s.cfg.DaemonFreshStartPath()); err != nil {
+					s.logger.Printf("persist fresh reconciliation request failed: %v", err)
+				}
+			}
+			if s.indexer.IsRunning() || needsFresh {
 				if err := daemonstate.TriggerReindex(s.cfg.DaemonTriggerPath()); err != nil {
 					s.logger.Printf("failed to persist interrupted reindex trigger: %v", err)
 				} else {
@@ -193,24 +217,36 @@ func (s *Service) Run(ctx context.Context) error {
 				}
 			}
 			return nil
-		case e := <-events:
-			if e != nil {
-				path := filepath.Clean(e.Path())
-				accepted := s.shouldTrackPathChange(path)
-				if accepted {
-					pending[path] = struct{}{}
-					resetTimer(flushTimer, incrementalFlushDebounce)
-				}
-				s.metrics.Event(accepted, len(pending))
+		case <-watcher.overflow:
+			requestReconcile()
+		case event := <-watcher.events:
+			path := event.path
+			if _, exists := pending[path]; !exists && len(pending) >= pendingCapacity {
+				s.metrics.WatcherOverflow()
+				requestReconcile()
+				continue
+			}
+			pending[path] = pending[path] || event.discover
+			s.metrics.SetPending(len(pending))
+			if firstPending.IsZero() {
+				firstPending = time.Now()
+			}
+			if !draining {
+				resetTimer(flushTimer, incrementalFlushDelay(firstPending, time.Now()))
 			}
 		case <-flushTimer.C:
 			if s.indexer.IsRunning() {
 				continue
 			}
 			stats, err := s.flushPending(ctx, pending)
+			if stats.Overflow {
+				s.metrics.WatcherOverflow()
+				requestReconcile()
+			}
 			if err != nil {
 				s.logger.Printf("flush pending failed: %v", err)
-			} else if stats.Total > 0 {
+			}
+			if stats.Total > 0 {
 				s.logger.Printf("incremental flush | total=%d upserts=%d deletes=%d skipped=%d failures=%d", stats.Total, stats.Upserts, stats.Deletes, stats.Skipped, stats.Failures)
 				if stats.hasChanges() {
 					indexedTotal = applyIndexDelta(indexedTotal, stats.IndexDelta)
@@ -220,6 +256,18 @@ func (s *Service) Run(ctx context.Context) error {
 						startupPreviewDirty = true
 					}
 				}
+			}
+			if len(pending) == 0 {
+				pending = make(map[string]bool)
+				firstPending = time.Time{}
+				draining = false
+			} else {
+				draining = true
+				delay := time.Duration(0)
+				if err != nil {
+					delay = time.Second
+				}
+				resetTimer(flushTimer, delay)
 			}
 		case <-triggerTicker.C:
 			freshRequested, err := daemonstate.ConsumeFreshReindex(s.cfg.DaemonFreshStartPath())
@@ -246,10 +294,18 @@ func (s *Service) Run(ctx context.Context) error {
 					s.indexer.Stop()
 					continue
 				}
+				// A fresh request subsumes the trigger that accompanies it.
+				// Consume before dispatch, so later requests are not erased.
+				if err := daemonstate.ClearReindexTrigger(s.cfg.DaemonTriggerPath()); err != nil {
+					s.logger.Printf("consume redundant reindex trigger failed: %v", err)
+					continue
+				}
 				if err := s.startReindexFromScratch(ctx, "fresh reindex request"); err != nil {
 					s.logger.Printf("fresh reindex failed: %v", err)
 				} else {
 					pendingFreshStart = false
+					reconciling = true // Preserve fresh recovery intent if the scan fails.
+					reconcileRequested = false
 				}
 				continue
 			}
@@ -267,6 +323,13 @@ func (s *Service) Run(ctx context.Context) error {
 					s.logger.Printf("triggered reindex failed: %v", err)
 				}
 			}
+			if reconcileRequested && !s.indexer.IsRunning() {
+				if err := s.startReindexFromScratch(ctx, "reconciling filesystem event overflow"); err != nil {
+					s.logger.Printf("reconciliation start failed: %v", err)
+				} else {
+					reconcileRequested, reconciling = false, true
+				}
+			}
 		case <-statusTicker.C:
 			idx := s.indexer.CurrentStatus()
 			if idx.Running && (!lastIndexing || time.Since(lastProgressLog) >= 3*time.Second) {
@@ -274,7 +337,7 @@ func (s *Service) Run(ctx context.Context) error {
 				lastProgressLog = time.Now()
 			}
 			if refreshCompletedScan(ctx) && len(pending) > 0 {
-				resetTimer(flushTimer, incrementalFlushDebounce)
+				resetTimer(flushTimer, incrementalFlushDelay(firstPending, time.Now()))
 			}
 			now := s.currentTime()
 			if !idx.Running && s.shouldPublishStartupPreview(startupPreviewDirty, forceStartupPreviewPublish, now) {
@@ -335,6 +398,10 @@ func resetTimer(timer *time.Timer, delay time.Duration) {
 	timer.Reset(delay)
 }
 
+func incrementalFlushDelay(first, now time.Time) time.Duration {
+	return max(0, min(incrementalFlushDebounce, incrementalFlushMaxAge-now.Sub(first)))
+}
+
 func stopTimer(timer *time.Timer) {
 	if timer.Stop() {
 		return
@@ -355,21 +422,14 @@ type flushStats struct {
 	PreviewRelevant bool
 	Inserted        int
 	Unchanged       int
+	Overflow        bool
 }
 
 func (s flushStats) hasChanges() bool {
 	return s.Upserts > 0 || s.Deletes > 0
 }
 
-type pathChangeResult struct {
-	Upserted   int
-	Deleted    int
-	IndexDelta int
-	Entry      model.Entry
-	Unchanged  bool
-}
-
-func (s *Service) flushPending(ctx context.Context, pending map[string]struct{}) (flushStats, error) {
+func (s *Service) flushPending(ctx context.Context, pending map[string]bool) (flushStats, error) {
 	stats := flushStats{}
 	if len(pending) == 0 {
 		return stats, nil
@@ -380,76 +440,107 @@ func (s *Service) flushPending(ctx context.Context, pending map[string]struct{})
 			stats.Unchanged, stats.Skipped-stats.Unchanged, stats.Failures, time.Since(started))
 		s.metrics.SetPending(len(pending))
 	}()
-	paths := make([]string, 0, len(pending))
-	for p := range pending {
-		paths = append(paths, p)
-	}
-	stats.Total = len(paths)
-	for _, path := range paths {
-		delete(pending, path)
+	changes := make([]store.Change, 0, min(len(pending), incrementalBatchSize))
+	var readErr error
+	for path, discover := range pending {
+		if stats.Total >= incrementalBatchSize {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
+		stats.Total++
 		if !s.shouldTrackPathChange(path) {
+			delete(pending, path)
 			stats.Skipped++
 			continue
 		}
-		result, err := s.applyPathChange(ctx, path, rootForPath(s.cfg.IncludePaths, path))
-		if err != nil {
+		entry, err := s.scanner.EntryFromPath(path, rootForPath(s.cfg.IncludePaths, path))
+		if err == nil && discover && entry.Type == model.TypeDirectory {
+			stats.Overflow, err = s.queueDirectoryChildren(ctx, path, pending)
+			if stats.Overflow {
+				return stats, nil
+			}
+			if err == nil {
+				pending[path] = false
+			}
+		}
+		if err != nil && ctx.Err() != nil {
+			return stats, ctx.Err()
+		}
+		if err == nil {
+			changes = append(changes, store.Change{Path: path, Entry: &entry})
+		} else if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			changes = append(changes, store.Change{Path: path})
+		} else if os.IsPermission(err) {
+			delete(pending, path)
+			stats.Skipped++
+		} else {
+			// Retain this path for retry without poisoning valid changes.
 			stats.Failures++
-			s.logger.Printf("apply path change %s failed: %v", path, err)
-			continue
+			if readErr == nil {
+				readErr = err
+			}
+		}
+	}
+	results, err := s.store.ApplyChanges(ctx, changes, incrementalBatchSize)
+	if err != nil {
+		stats.Failures += len(changes)
+		return stats, errors.Join(readErr, err)
+	}
+	for i, result := range results {
+		change := changes[i]
+		if result.Complete {
+			delete(pending, change.Path)
 		}
 		if result.Deleted > 0 {
 			stats.Deletes += result.Deleted
 			stats.IndexDelta -= result.Deleted
-			if s.deletedPathMayAffectStartupPreview(path) {
-				stats.PreviewRelevant = true
+			stats.PreviewRelevant = stats.PreviewRelevant || s.deletedPathMayAffectStartupPreview(change.Path)
+		} else if result.Changed {
+			stats.Upserts++
+			if result.Inserted {
+				stats.Inserted++
+				stats.IndexDelta++
 			}
-			continue
-		}
-		if result.Upserted > 0 {
-			stats.Upserts += result.Upserted
-			stats.Inserted += max(result.IndexDelta, 0)
-			stats.IndexDelta += result.IndexDelta
-			if s.entryMayAffectStartupPreview(result.Entry) {
-				stats.PreviewRelevant = true
+			stats.PreviewRelevant = stats.PreviewRelevant || s.entryMayAffectStartupPreview(*change.Entry)
+		} else {
+			stats.Skipped++
+			if change.Entry != nil {
+				stats.Unchanged++
 			}
-			continue
-		}
-		stats.Skipped++
-		if result.Unchanged {
-			stats.Unchanged++
 		}
 	}
-	return stats, nil
+	return stats, readErr
 }
 
-func (s *Service) applyPathChange(ctx context.Context, path, root string) (pathChangeResult, error) {
-	entry, err := s.scanner.EntryFromPath(path, root)
+// Read only a bounded directory page. Children reuse the existing pending map;
+// no cursor, worker, or recursive in-memory walk is retained across turns.
+func (s *Service) queueDirectoryChildren(ctx context.Context, path string, pending map[string]bool) (bool, error) {
+	f, err := os.Open(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			deleted, err := s.store.DeletePathPrefixCount(ctx, path)
-			if err != nil {
-				return pathChangeResult{}, err
-			}
-			return pathChangeResult{Deleted: deleted}, nil
+		return false, err
+	}
+	defer f.Close()
+	entries, err := f.ReadDir(pendingCapacity + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return false, err
 		}
-		if os.IsPermission(err) {
-			return pathChangeResult{}, nil
+		child := filepath.Join(path, entry.Name())
+		if !s.shouldTrackPathChange(child) {
+			continue
 		}
-		return pathChangeResult{}, err
+		if _, exists := pending[child]; !exists && len(pending) >= pendingCapacity {
+			return true, nil
+		}
+		pending[child] = pending[child] || entry.IsDir()
 	}
-
-	result, err := s.store.UpsertEntryIfChanged(ctx, entry)
-	if err != nil {
-		return pathChangeResult{}, err
-	}
-	if !result.Changed {
-		return pathChangeResult{Unchanged: true}, nil
-	}
-	indexDelta := 0
-	if result.Inserted {
-		indexDelta = 1
-	}
-	return pathChangeResult{Upserted: 1, IndexDelta: indexDelta, Entry: entry}, nil
+	// More entries than our discovery budget require the existing recovery scan.
+	return len(entries) > pendingCapacity, nil
 }
 
 func (s *Service) buildStatus(indexedTotal int, snapshotSeq int64) daemonstate.Status {

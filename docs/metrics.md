@@ -43,7 +43,7 @@ messages. Counts and timestamps still reveal aggregate activity patterns.
 | I/O | OS-attributed disk bytes read/written, logical bytes written, interval deltas |
 | Go | Heap allocation/in-use bytes, goroutines, cumulative GC cycles and pause seconds |
 | Index | Indexed entry count, database and WAL sizes, pending entries and interval maximum |
-| Events | Cumulative events received/accepted/ignored |
+| Events | Cumulative events received/accepted/ignored and coalesced watcher-overflow/reconciliation signals |
 | Incremental work | Flush count, inserted/updated/deleted/unchanged/skipped entries, failed entries, cumulative and maximum flush duration |
 | Full indexing | Scan runs, active scans, scanned entries, failures, cumulative and maximum completed-scan duration |
 | Preview | Cache publication attempts/failures, cumulative and maximum publication duration |
@@ -55,6 +55,29 @@ and `internal/metrics/counters.go`. Suffixes `_bytes` and `_seconds` specify uni
 cover the interval since the last successfully persisted record. Scan duration
 is added when a scan finishes, including interrupted scans; ordinary cancellation
 is not counted as a scan failure. Unchanged/skipped paths are separate counters.
+
+`watcher_overflows_total` counts coalesced recovery requests, not lost-file counts.
+Requests include a full delivery channel, a full pending set/discovery budget,
+and native event-loss flags. Ordinary directory creation and moves discover
+children within that subtree through the bounded pending set, not global scans.
+Only exhausting a bound escalates scoped discovery to recovery. Recovery
+uses the existing full scanner; paths arriving during a scan remain bounded and
+another overflow requests a follow-up reconciliation. A failed reconciliation is
+retried, and unfinished work is signaled for recovery on the next daemon start.
+Event counters are observed before bounded delivery, so accepted events may also
+require reconciliation rather than a direct incremental update.
+
+The pending set is capped at 8,192 paths, as is watcher delivery. An incremental
+flush commits at most 128 indexed-entry changes (including prefix deletion) per turn,
+then returns to event/status handling. Three-second quiet-period scheduling is
+capped at ten seconds from the first pending event; full scans and filesystem/SQL
+latency can delay actual completion. Empty pending maps are replaced to release
+capacity. No per-path history is kept by the native watcher.
+
+Missing descendants whose parent is no longer a directory are treated as deleted
+paths. Other path-read failures increment entry failure counts and retain those
+paths for retry without blocking valid changes in the same batch. Fresh-scan
+requests consume their accompanying trigger so restart recovery runs once.
 
 Process memory is sampled every 15 seconds and summarized at the recording
 interval. `process_peaks` holds observed maxima separately from the current

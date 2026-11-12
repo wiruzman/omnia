@@ -5,7 +5,6 @@ go 1.25.0
 require (
 	github.com/gdamore/tcell/v2 v2.13.9
 	github.com/rivo/tview v0.42.0
-	github.com/rjeczalik/notify v0.9.3
 )
 
 require (

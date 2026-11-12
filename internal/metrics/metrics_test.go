@@ -126,8 +126,9 @@ func TestCountersConcurrentAndWindowPeaks(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 100 {
-				c.Event(true, 7)
-				c.Event(false, 7)
+				c.Event(true)
+				c.Event(false)
+				c.SetPending(7)
 				c.Flush(1, 2, 3, 4, 5, 6, time.Second)
 				c.Preview(time.Millisecond, true)
 				c.ScanStarted()
@@ -147,7 +148,7 @@ func TestCountersConcurrentAndWindowPeaks(t *testing.T) {
 		t.Fatalf("incorrect reset: %+v", next)
 	}
 	var disabled *Counters
-	disabled.Event(true, 1)
+	disabled.Event(true)
 	disabled.Flush(1, 1, 1, 1, 1, 1, time.Second)
 	disabled.Preview(time.Second, true)
 	disabled.ScanStarted()
@@ -432,7 +433,7 @@ func TestRecorderPeriodicAndFinalSnapshots(t *testing.T) {
 		})
 	}()
 	defer func() { cancel(); <-done }()
-	counters.Event(true, 1)
+	counters.Event(true)
 	deadline := time.Now().Add(5 * time.Second)
 	for len(records(t, cfg.MetricsDir())) < 2 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)

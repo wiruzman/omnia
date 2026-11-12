@@ -13,6 +13,7 @@ type Work struct {
 	EventsReceived    uint64  `json:"events_received_total"`
 	EventsAccepted    uint64  `json:"events_accepted_total"`
 	EventsIgnored     uint64  `json:"events_ignored_total"`
+	WatcherOverflows  uint64  `json:"watcher_overflows_total"`
 	Pending           uint64  `json:"pending_entries"`
 	PendingMax        uint64  `json:"pending_entries_max"`
 	Indexed           uint64  `json:"indexed_entries"`
@@ -62,7 +63,7 @@ func (c *Counters) AddScanned(n uint64) {
 }
 
 // All mutation methods tolerate nil: disabled collection does no allocation or I/O.
-func (c *Counters) Event(accepted bool, pending int) {
+func (c *Counters) Event(accepted bool) {
 	if c == nil {
 		return
 	}
@@ -74,7 +75,15 @@ func (c *Counters) Event(accepted bool, pending int) {
 	} else {
 		c.work.EventsIgnored++
 	}
-	c.pending(pending)
+}
+
+func (c *Counters) WatcherOverflow() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.work.WatcherOverflows++
 }
 
 func (c *Counters) pending(n int) {

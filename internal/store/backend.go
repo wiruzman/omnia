@@ -19,6 +19,7 @@ type Backend interface {
 	Query(ctx context.Context, query string, sort sorter.SortSpec, limit, offset int) (QueryResult, error)
 	UpsertEntry(ctx context.Context, e model.Entry) error
 	UpsertEntryIfChanged(ctx context.Context, e model.Entry) (UpsertEntryResult, error)
+	ApplyChanges(ctx context.Context, changes []Change, limit int) ([]ChangeResult, error)
 	DeletePath(ctx context.Context, path string) error
 	DeletePathPrefix(ctx context.Context, dirPath string) error
 	DeletePathPrefixCount(ctx context.Context, dirPath string) (int, error)
@@ -28,4 +29,17 @@ type Backend interface {
 type UpsertEntryResult struct {
 	Changed  bool
 	Inserted bool
+}
+
+// A nil Entry removes Path and its descendants. Results correspond to a prefix
+// of the input; incomplete prefix deletions must be submitted again.
+type Change struct {
+	Path  string
+	Entry *model.Entry
+}
+
+type ChangeResult struct {
+	UpsertEntryResult
+	Deleted  int
+	Complete bool
 }

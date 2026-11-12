@@ -48,7 +48,7 @@ func TestMetricsObserveIncrementalWorkWithoutPaths(t *testing.T) {
 	}
 	flush := func() {
 		t.Helper()
-		if _, err := svc.flushPending(ctx, map[string]struct{}{path: {}}); err != nil {
+		if _, err := svc.flushPending(ctx, map[string]bool{path: false}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -123,7 +123,11 @@ func TestRunningDaemonRecordsEventsAndShutdown(t *testing.T) {
 	if err := os.WriteFile(seed, []byte("seed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.applyPathChange(context.Background(), seed, root); err != nil {
+	entry, err := svc.scanner.EntryFromPath(seed, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.store.UpsertEntryIfChanged(context.Background(), entry); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -703,7 +707,7 @@ func TestFlushPendingSkipsUnchangedEntry(t *testing.T) {
 		logger:  log.New(io.Discard, "", 0),
 	}
 
-	stats, err := svc.flushPending(ctx, map[string]struct{}{path: {}})
+	stats, err := svc.flushPending(ctx, map[string]bool{path: false})
 	if err != nil {
 		t.Fatal(err)
 	}

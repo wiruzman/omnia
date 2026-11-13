@@ -56,7 +56,7 @@ func isolatedService(t *testing.T) (*Service, string) {
 }
 
 func testWatcher(svc *Service, capacity int) *fileWatcher {
-	w := &fileWatcher{events: make(chan fileEvent, capacity), overflow: make(chan struct{}, 1), accept: svc.shouldTrackPathChange, metrics: svc.metrics}
+	w := &fileWatcher{events: make(chan fileEvent, capacity), overflow: make(chan struct{}, 1), accept: svc.shouldTrackPathChange, metrics: svc.metrics, roots: svc.cfg.IncludePaths}
 	svc.watcher = w
 	return w
 }
@@ -139,7 +139,7 @@ func TestContinuousEventsFlushBeforeQuietPeriod(t *testing.T) {
 func TestFlushPendingBoundsWorkIncludingLargeDirectoryDeletion(t *testing.T) {
 	svc, root := isolatedService(t)
 	ctx := context.Background()
-	pending := map[string]bool{}
+	pending := map[string]pendingWork{}
 	directory := filepath.Join(root, "deleted-tree")
 	if err := os.Mkdir(directory, 0700); err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestFlushPendingBoundsWorkIncludingLargeDirectoryDeletion(t *testing.T) {
 		if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		pending[path] = false
+		pending[path] = 0
 	}
 	stats, err := svc.flushPending(ctx, pending)
 	if err != nil || stats.Inserted != incrementalBatchSize || len(pending) != 300-incrementalBatchSize {
@@ -164,7 +164,7 @@ func TestFlushPendingBoundsWorkIncludingLargeDirectoryDeletion(t *testing.T) {
 	if err := os.RemoveAll(directory); err != nil {
 		t.Fatal(err)
 	}
-	pending = map[string]bool{directory: false}
+	pending = map[string]pendingWork{directory: 0}
 	stats, err = svc.flushPending(ctx, pending)
 	if err != nil || stats.Deletes != incrementalBatchSize || len(pending) != 1 {
 		t.Fatalf("unbounded prefix delete: %+v pending=%d err=%v", stats, len(pending), err)
@@ -183,7 +183,7 @@ func TestFailedBatchRetainsPendingPaths(t *testing.T) {
 	if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	pending := map[string]bool{path: false}
+	pending := map[string]pendingWork{path: 0}
 	original := svc.store
 	svc.store = failingChangeStore{original}
 	if stats, err := svc.flushPending(context.Background(), pending); err == nil || stats.Inserted != 0 || len(pending) != 1 {
@@ -289,6 +289,9 @@ func TestPendingCapacityOverflowRequestsRecovery(t *testing.T) {
 	})
 	if m := svc.metrics.Snapshot(); m.PendingMax > pendingCapacity {
 		t.Fatalf("unbounded pending map: %+v", m)
+	}
+	if m := svc.metrics.Snapshot(); m.PendingOverflows != 1 || m.GlobalRecoveryScans != 1 {
+		t.Fatalf("pending-capacity reason not recorded: %+v", m)
 	}
 }
 

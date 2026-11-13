@@ -44,6 +44,7 @@ messages. Counts and timestamps still reveal aggregate activity patterns.
 | Go | Heap allocation/in-use bytes, goroutines, cumulative GC cycles and pause seconds |
 | Index | Indexed entry count, database and WAL sizes, pending entries and interval maximum |
 | Events | Cumulative events received/accepted/ignored and coalesced watcher-overflow/reconciliation signals |
+| Recovery | Fixed counters for native flags, delivery/pending/discovery limits, scoped/global requests, global requests during a scan, and started global recovery scans |
 | Incremental work | Flush count, inserted/updated/deleted/unchanged/skipped entries, failed entries, cumulative and maximum flush duration |
 | Full indexing | Scan runs, active scans, scanned entries, failures, cumulative and maximum completed-scan duration |
 | Preview | Cache publication attempts/failures, cumulative and maximum publication duration |
@@ -56,13 +57,33 @@ cover the interval since the last successfully persisted record. Scan duration
 is added when a scan finishes, including interrupted scans; ordinary cancellation
 is not counted as a scan failure. Unchanged/skipped paths are separate counters.
 
-`watcher_overflows_total` counts coalesced recovery requests, not lost-file counts.
-Requests include a full delivery channel, a full pending set/discovery budget,
-and native event-loss flags. Ordinary directory creation and moves discover
-children within that subtree through the bounded pending set, not global scans.
-Only exhausting a bound escalates scoped discovery to recovery. Recovery
-uses the existing full scanner; paths arriving during a scan remain bounded and
-another overflow requests a follow-up reconciliation. A failed reconciliation is
+`native_must_scan_total`, `native_user_dropped_total`,
+`native_kernel_dropped_total`, `native_ids_wrapped_total`,
+`native_root_changed_total`, `native_mount_total`, and `native_unmount_total`
+count observed flags, including flags on ignored paths. A notification can carry
+several flags, so their sum is not a count of notifications or recovery scans.
+These fields are additive to schema version 1. Older records omit them; importers
+should treat absent reason fields as unavailable, not measured zeros.
+`delivery_overflows_total` counts each failed bounded-channel delivery;
+`pending_overflows_total` and `discovery_overflows_total` count exhausted budgets.
+
+`scoped_recovery_requests_total` counts accepted scopes handed to bounded delivery.
+Subtree coalescing, root changes, and mount/unmount notifications use that path,
+as do directory creation/moves without counting as recovery requests. Recovery
+includes a bounded cached-descendant lookup to repair missed deletions; permission
+failures retain inaccessible entries. Queued descendants recheck their current
+ancestors, so replacement symlinks are not traversed and restored directories do
+not inherit stale removal decisions. Events above configured roots are clipped
+to affected roots; ignored/out-of-scope notifications do not schedule scans.
+
+`watcher_overflows_total` counts coalesced global-loss indications, not lost-file
+counts or the sum of reason observations. True stream loss (user/kernel drops or
+wrapped event IDs) and exhausted budgets request global recovery.
+`global_recovery_requests_total` counts those requests consumed by the service;
+`global_recovery_requests_during_scan_total` counts the subset received during
+an active scan. `global_recovery_scans_total` counts successfully dispatched
+global recovery attempts, including retries, not manual/initial fresh scans.
+Another loss during a scan retains a follow-up request. A failed reconciliation is
 retried, and unfinished work is signaled for recovery on the next daemon start.
 Event counters are observed before bounded delivery, so accepted events may also
 require reconciliation rather than a direct incremental update.
@@ -146,13 +167,14 @@ Only strictly matching regular files in this directory are eligible for deletion
 unrelated files and symlinks are excluded. A cap too small for one record prevents
 recording and increments the persistence failure counter.
 
-Representative schema-v1 records are about **1.5 KiB**. At one record per minute:
+Representative schema-v1 records with recovery reasons are about **2 KiB**.
+At one record per minute:
 
-| Retention | Estimated payload at 1,551 bytes/record | Planning range at 1–2 KiB/record |
+| Retention | Estimated payload at 2,028 bytes/record | Planning range at 2–3 KiB/record |
 | --- | --- | --- |
-| 30 days | 64 MiB | 42–84 MiB |
-| 90 days | 192 MiB | 127–253 MiB |
-| 180 days | 383 MiB | 253–506 MiB |
+| 30 days | 84 MiB | 84–127 MiB |
+| 90 days | 251 MiB | 253–380 MiB |
+| 180 days | 501 MiB | 506–759 MiB |
 
 Record size varies with the number of digits in counters. Startup/shutdown records,
 filesystem metadata/allocation, and extra partial-day retention add overhead.

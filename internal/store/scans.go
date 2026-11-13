@@ -31,13 +31,11 @@ func (s *SQLiteStore) CleanupStale(ctx context.Context, scanID int64, roots []st
 		return err
 	}
 	defer stmt.Finalize()
-	stopInterrupt := s.db.interruptOnCancel(ctx)
-	defer stopInterrupt()
 	for _, root := range roots {
 		cursorScan, cursorID := firstScanCursor, firstScanCursor
 		for {
 			var ids []int64
-			err := s.db.WithTx(func() error {
+			err := s.db.WithTx(ctx, func() error {
 				defer stmt.Reset()
 				if err := ctx.Err(); err != nil {
 					return err
@@ -72,9 +70,6 @@ func (s *SQLiteStore) CleanupStale(ctx context.Context, scanID int64, roots []st
 				}
 				return ctx.Err()
 			})
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
 			if err != nil {
 				return err
 			}
@@ -97,9 +92,7 @@ func (s *SQLiteStore) MarkSubtreeSeen(ctx context.Context, scanID int64, path st
 		return err
 	}
 	defer w.close()
-	stopInterrupt := s.db.interruptOnCancel(ctx)
-	defer stopInterrupt()
-	err = s.db.WithTx(func() error {
+	err = s.db.WithTx(ctx, func() error {
 		id, _, exists, err := lookupEntry(w.lookup, path)
 		if err != nil || !exists {
 			return err
@@ -109,9 +102,6 @@ func (s *SQLiteStore) MarkSubtreeSeen(ctx context.Context, scanID int64, path st
 		}
 		return ctx.Err()
 	})
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
 	if err != nil {
 		return err
 	}
@@ -126,7 +116,7 @@ func (s *SQLiteStore) MarkSubtreeSeen(ctx context.Context, scanID int64, path st
 	cursorPath, cursorID := prefix, firstScanCursor
 	for {
 		var ids []int64
-		err := s.db.WithTx(func() error {
+		err := s.db.WithTx(ctx, func() error {
 			defer stmt.Reset()
 			for i, value := range []any{prefix, prefixUpperBound(prefix), cursorPath, cursorID, scanProtectionBatchSize} {
 				if err := bindSQLiteAny(stmt, i+1, value); err != nil {
@@ -158,9 +148,6 @@ func (s *SQLiteStore) MarkSubtreeSeen(ctx context.Context, scanID int64, path st
 			}
 			return ctx.Err()
 		})
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
 		if err != nil {
 			return err
 		}

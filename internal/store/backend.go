@@ -12,6 +12,7 @@ type Backend interface {
 	BeginScan(ctx context.Context, scanID int64) error
 	UpsertBatch(ctx context.Context, scanID int64, batch []model.Entry) error
 	MarkSubtreeSeen(ctx context.Context, scanID int64, path string) error
+	PathsUnder(ctx context.Context, path string, limit int) ([]string, error)
 	CleanupStale(ctx context.Context, scanID int64, roots []string) error
 	Count(ctx context.Context) (int, error)
 	CountByRoots(ctx context.Context, roots []string) (map[string]int64, error)

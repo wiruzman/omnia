@@ -209,7 +209,7 @@ func TestFullScanMarkerUpdateReducesWAL(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = st.db.WithTx(func() error {
+			err = st.db.WithTx(context.Background(), func() error {
 				for _, e := range batch {
 					id, _, _, err := lookupEntry(w.lookup, e.Path)
 					if err != nil {

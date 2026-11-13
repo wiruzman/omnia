@@ -135,7 +135,7 @@ func (a *App) Run(ctx context.Context) error {
 	var startOnce sync.Once
 	a.tui.SetAfterDrawFunc(func(_ tcell.Screen) {
 		startOnce.Do(func() {
-			go a.startInitialRefresh(ctx)
+			go a.startInitialRefresh(ctx, a.sortSpec)
 		})
 	})
 
@@ -143,40 +143,31 @@ func (a *App) Run(ctx context.Context) error {
 	return a.tui.Run()
 }
 
-func (a *App) startInitialRefresh(ctx context.Context) {
-	warmStarted := a.queueCachedWarmStart(ctx)
-	if ctx.Err() != nil {
-		return
-	}
-	if strings.TrimSpace(a.query) != "" {
-		return
-	}
-	if warmStarted {
-		return
-	}
-	a.requestRefreshAsync(a.query, a.sortSpec)
-}
-
-func (a *App) queueCachedWarmStart(ctx context.Context) bool {
-	sortSpec := a.sortSpec
-	res, ok, err := a.loadWarmStartCache()
+func (a *App) startInitialRefresh(ctx context.Context, sortSpec sorter.SortSpec) {
+	// The sort is captured by the UI before starting this worker. Only cache
+	// I/O happens here; query state and refresh decisions belong to the UI loop.
+	limit := startupcache.EffectiveLimit(a.cfg.MaxResults)
+	res, ok, err := startupcache.Load(startupcache.Path(a.cfg), sortSpec, limit)
 	if err != nil {
 		a.logger.Printf("load startup cache failed: %v", err)
 	}
-	if err != nil || !ok {
-		return false
-	}
 	if ctx.Err() != nil {
-		return false
+		return
 	}
 	a.tui.QueueUpdateDraw(func() {
-		if strings.TrimSpace(a.query) != "" || len(a.entries) > 0 || a.sortSpec != sortSpec {
+		if ctx.Err() != nil || strings.TrimSpace(a.query) != "" {
+			return
+		}
+		if err != nil || !ok {
+			a.requestRefreshAsync(a.query, a.sortSpec)
+			return
+		}
+		if len(a.entries) > 0 || a.sortSpec != sortSpec {
 			return
 		}
 		a.rememberEmptyQueryResults("", sortSpec, res.Entries, res.Total)
 		a.applyResults(res.Entries, res.Total)
 	})
-	return true
 }
 
 func (a *App) loadWarmStartCache() (store.QueryResult, bool, error) {

@@ -72,10 +72,11 @@ func formatBytesPerSecond(v float64) string {
 }
 
 func (a *App) startStatusLoop(ctx context.Context) {
+	// Initialize UI-owned status before Run starts the event loop.
+	wasRunning := a.isIndexing()
 	ticker := time.NewTicker(400 * time.Millisecond)
 	go func() {
 		defer ticker.Stop()
-		wasRunning := a.isIndexing()
 		lastLiveRefresh := time.Now()
 		for {
 			select {
@@ -181,14 +182,16 @@ func shouldAttemptSnapshotRefresh(targetSeq, lastAttemptSeq int64, lastAttemptAt
 }
 
 func (a *App) persistSortSpec() {
-	a.cfg.SortColumn = string(a.sortSpec.Column)
-	a.cfg.SortDirection = string(a.sortSpec.Direction)
+	// Keep runtime configuration immutable for background readers.
+	cfg := a.cfg
+	cfg.SortColumn = string(a.sortSpec.Column)
+	cfg.SortDirection = string(a.sortSpec.Direction)
 	cfgPath, err := config.ConfigPath()
 	if err != nil {
 		a.logger.Printf("resolve config path failed while saving sort: %v", err)
 		return
 	}
-	if err := config.Save(cfgPath, a.cfg); err != nil {
+	if err := config.Save(cfgPath, cfg); err != nil {
 		a.logger.Printf("save config failed while saving sort: %v", err)
 	}
 }

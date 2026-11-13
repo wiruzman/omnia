@@ -48,7 +48,7 @@ func TestMetricsObserveIncrementalWorkWithoutPaths(t *testing.T) {
 	}
 	flush := func() {
 		t.Helper()
-		if _, err := svc.flushPending(ctx, map[string]bool{path: false}); err != nil {
+		if _, err := svc.flushPending(ctx, map[string]pendingWork{path: 0}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -707,7 +707,7 @@ func TestFlushPendingSkipsUnchangedEntry(t *testing.T) {
 		logger:  log.New(io.Discard, "", 0),
 	}
 
-	stats, err := svc.flushPending(ctx, map[string]bool{path: false})
+	stats, err := svc.flushPending(ctx, map[string]pendingWork{path: 0})
 	if err != nil {
 		t.Fatal(err)
 	}

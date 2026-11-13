@@ -56,6 +56,8 @@ import (
 	"fmt"
 	"runtime/cgo"
 	"unsafe"
+
+	"github.com/wiruzman/omnia/internal/metrics"
 )
 
 func startNativeWatcher(roots []string, w *fileWatcher) (func(), error) {
@@ -87,8 +89,30 @@ func goOmniaEvents(handle C.uintptr_t, n C.size_t, paths unsafe.Pointer, flags u
 }
 
 func (w *fileWatcher) nativeEvent(name string, flag uint32) {
-	if flag&(C.kFSEventStreamEventFlagMustScanSubDirs|C.kFSEventStreamEventFlagUserDropped|C.kFSEventStreamEventFlagKernelDropped|C.kFSEventStreamEventFlagEventIdsWrapped|C.kFSEventStreamEventFlagRootChanged|C.kFSEventStreamEventFlagMount|C.kFSEventStreamEventFlagUnmount) != 0 {
+	for _, reason := range []struct {
+		flag   uint32
+		reason metrics.RecoveryReason
+	}{
+		{C.kFSEventStreamEventFlagMustScanSubDirs, metrics.NativeMustScan},
+		{C.kFSEventStreamEventFlagUserDropped, metrics.NativeUserDropped},
+		{C.kFSEventStreamEventFlagKernelDropped, metrics.NativeKernelDropped},
+		{C.kFSEventStreamEventFlagEventIdsWrapped, metrics.NativeIDsWrapped},
+		{C.kFSEventStreamEventFlagRootChanged, metrics.NativeRootChanged},
+		{C.kFSEventStreamEventFlagMount, metrics.NativeMount},
+		{C.kFSEventStreamEventFlagUnmount, metrics.NativeUnmount},
+	} {
+		if flag&reason.flag != 0 {
+			w.metrics.RecoveryEvent(reason.reason)
+		}
+	}
+	// Actual loss invalidates the stream, regardless of the reported path.
+	if flag&(C.kFSEventStreamEventFlagUserDropped|C.kFSEventStreamEventFlagKernelDropped|C.kFSEventStreamEventFlagEventIdsWrapped) != 0 {
 		w.lost()
+		return
+	}
+	if flag&(C.kFSEventStreamEventFlagMustScanSubDirs|C.kFSEventStreamEventFlagRootChanged|C.kFSEventStreamEventFlagMount|C.kFSEventStreamEventFlagUnmount) != 0 {
+		w.recoverPath(name)
+		return
 	}
 	if flag&(C.kFSEventStreamEventFlagItemCreated|C.kFSEventStreamEventFlagItemRemoved|C.kFSEventStreamEventFlagItemRenamed|C.kFSEventStreamEventFlagItemModified|C.kFSEventStreamEventFlagItemInodeMetaMod) == 0 {
 		return

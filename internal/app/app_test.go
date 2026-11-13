@@ -1506,6 +1506,26 @@ func TestLoadWarmStartCacheReturnsEntriesForConfiguredSort(t *testing.T) {
 	}
 }
 
+func TestPersistSortSpecDoesNotMutateRuntimeConfiguration(t *testing.T) {
+	a := newTestApp(t, &mockSystemAdapter{})
+	if _, err := config.Load(); err != nil { // Create the isolated config directory as startup does.
+		t.Fatal(err)
+	}
+	a.sortSpec = sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc}
+	a.persistSortSpec()
+
+	if a.cfg.SortColumn != "name" || a.cfg.SortDirection != "ASC" {
+		t.Fatalf("runtime configuration was mutated: %s %s", a.cfg.SortColumn, a.cfg.SortDirection)
+	}
+	saved, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.SortColumn != "size" || saved.SortDirection != "DESC" || saved.MaxResults != a.cfg.MaxResults {
+		t.Fatalf("saved sort/configuration mismatch: %+v", saved)
+	}
+}
+
 func TestSortColumnIndex(t *testing.T) {
 	cases := []struct {
 		column sorter.Column

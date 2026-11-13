@@ -10,37 +10,129 @@ import (
 // Work is an explicit allowlist. Counters are cumulative for this daemon run;
 // gauges and fields ending in _max describe the current recording interval.
 type Work struct {
-	EventsReceived    uint64  `json:"events_received_total"`
-	EventsAccepted    uint64  `json:"events_accepted_total"`
-	EventsIgnored     uint64  `json:"events_ignored_total"`
-	WatcherOverflows  uint64  `json:"watcher_overflows_total"`
-	Pending           uint64  `json:"pending_entries"`
-	PendingMax        uint64  `json:"pending_entries_max"`
-	Indexed           uint64  `json:"indexed_entries"`
-	Flushes           uint64  `json:"flushes_total"`
-	Inserted          uint64  `json:"inserted_entries_total"`
-	Updated           uint64  `json:"updated_entries_total"`
-	Deleted           uint64  `json:"deleted_entries_total"`
-	Unchanged         uint64  `json:"unchanged_entries_total"`
-	Skipped           uint64  `json:"skipped_entries_total"`
-	Failures          uint64  `json:"entry_failures_total"`
-	FlushSeconds      float64 `json:"flush_seconds_total"`
-	FlushMaxSeconds   float64 `json:"flush_seconds_max"`
-	PreviewBuilds     uint64  `json:"preview_builds_total"`
-	PreviewFailures   uint64  `json:"preview_failures_total"`
-	PreviewSeconds    float64 `json:"preview_seconds_total"`
-	PreviewMaxSeconds float64 `json:"preview_seconds_max"`
-	ScanRuns          uint64  `json:"scan_runs_total"`
-	ScanActive        uint64  `json:"active_scans"`
-	Scanned           uint64  `json:"scanned_entries_total"`
-	ScanFailures      uint64  `json:"scan_failures_total"`
-	ScanSeconds       float64 `json:"scan_seconds_total"`
-	ScanMaxSeconds    float64 `json:"scan_seconds_max"`
+	EventsReceived         uint64  `json:"events_received_total"`
+	EventsAccepted         uint64  `json:"events_accepted_total"`
+	EventsIgnored          uint64  `json:"events_ignored_total"`
+	WatcherOverflows       uint64  `json:"watcher_overflows_total"`
+	NativeMustScan         uint64  `json:"native_must_scan_total"`
+	NativeUserDropped      uint64  `json:"native_user_dropped_total"`
+	NativeKernelDropped    uint64  `json:"native_kernel_dropped_total"`
+	NativeIDsWrapped       uint64  `json:"native_ids_wrapped_total"`
+	NativeRootChanged      uint64  `json:"native_root_changed_total"`
+	NativeMount            uint64  `json:"native_mount_total"`
+	NativeUnmount          uint64  `json:"native_unmount_total"`
+	DeliveryOverflows      uint64  `json:"delivery_overflows_total"`
+	PendingOverflows       uint64  `json:"pending_overflows_total"`
+	DiscoveryOverflows     uint64  `json:"discovery_overflows_total"`
+	ScopedRecoveryRequests uint64  `json:"scoped_recovery_requests_total"`
+	GlobalRecoveryRequests uint64  `json:"global_recovery_requests_total"`
+	RecoveryDuringScan     uint64  `json:"global_recovery_requests_during_scan_total"`
+	GlobalRecoveryScans    uint64  `json:"global_recovery_scans_total"`
+	Pending                uint64  `json:"pending_entries"`
+	PendingMax             uint64  `json:"pending_entries_max"`
+	Indexed                uint64  `json:"indexed_entries"`
+	Flushes                uint64  `json:"flushes_total"`
+	Inserted               uint64  `json:"inserted_entries_total"`
+	Updated                uint64  `json:"updated_entries_total"`
+	Deleted                uint64  `json:"deleted_entries_total"`
+	Unchanged              uint64  `json:"unchanged_entries_total"`
+	Skipped                uint64  `json:"skipped_entries_total"`
+	Failures               uint64  `json:"entry_failures_total"`
+	FlushSeconds           float64 `json:"flush_seconds_total"`
+	FlushMaxSeconds        float64 `json:"flush_seconds_max"`
+	PreviewBuilds          uint64  `json:"preview_builds_total"`
+	PreviewFailures        uint64  `json:"preview_failures_total"`
+	PreviewSeconds         float64 `json:"preview_seconds_total"`
+	PreviewMaxSeconds      float64 `json:"preview_seconds_max"`
+	ScanRuns               uint64  `json:"scan_runs_total"`
+	ScanActive             uint64  `json:"active_scans"`
+	Scanned                uint64  `json:"scanned_entries_total"`
+	ScanFailures           uint64  `json:"scan_failures_total"`
+	ScanSeconds            float64 `json:"scan_seconds_total"`
+	ScanMaxSeconds         float64 `json:"scan_seconds_max"`
 }
 
 type Counters struct {
 	mu   sync.Mutex
 	work Work
+}
+
+// RecoveryReason is a closed numeric allowlist, never an arbitrary label or path.
+type RecoveryReason uint8
+
+const (
+	NativeMustScan RecoveryReason = iota
+	NativeUserDropped
+	NativeKernelDropped
+	NativeIDsWrapped
+	NativeRootChanged
+	NativeMount
+	NativeUnmount
+	DeliveryOverflow
+	PendingOverflow
+	DiscoveryOverflow
+)
+
+// RecoveryEvent counts observations, independently of coalesced recovery work.
+// A native event can carry more than one flag, so these counters are not additive.
+func (c *Counters) RecoveryEvent(reason RecoveryReason) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch reason {
+	case NativeMustScan:
+		c.work.NativeMustScan++
+	case NativeUserDropped:
+		c.work.NativeUserDropped++
+	case NativeKernelDropped:
+		c.work.NativeKernelDropped++
+	case NativeIDsWrapped:
+		c.work.NativeIDsWrapped++
+	case NativeRootChanged:
+		c.work.NativeRootChanged++
+	case NativeMount:
+		c.work.NativeMount++
+	case NativeUnmount:
+		c.work.NativeUnmount++
+	case DeliveryOverflow:
+		c.work.DeliveryOverflows++
+	case PendingOverflow:
+		c.work.PendingOverflows++
+	case DiscoveryOverflow:
+		c.work.DiscoveryOverflows++
+	}
+}
+
+func (c *Counters) ScopedRecoveryRequested() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.work.ScopedRecoveryRequests++
+}
+
+func (c *Counters) GlobalRecoveryRequested(duringScan bool) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.work.GlobalRecoveryRequests++
+	if duringScan {
+		c.work.RecoveryDuringScan++
+	}
+}
+
+func (c *Counters) GlobalRecoveryStarted() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.work.GlobalRecoveryScans++
 }
 
 // Snapshot returns a consistent numeric copy without resetting interval peaks.

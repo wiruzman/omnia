@@ -152,7 +152,7 @@ func (s *SQLiteStore) ApplyChanges(ctx context.Context, changes []Change, limit 
 	defer w.close()
 	var results []ChangeResult
 	scanID := time.Now().UnixMicro()
-	err = s.db.WithTx(func() error {
+	err = s.db.WithTx(ctx, func() error {
 		for _, change := range changes {
 			if err := ctx.Err(); err != nil {
 				return err

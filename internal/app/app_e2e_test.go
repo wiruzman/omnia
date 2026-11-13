@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -580,16 +582,17 @@ func queryDiagnostics(t *testing.T, a *App, queries ...string) map[string][]stri
 	return out
 }
 
-func startSimulatedTUI(t *testing.T, a *App, width, height int) tcell.SimulationScreen {
+func startSimulatedTUI(t *testing.T, a *App, width, height int) *snapshotScreen {
 	t.Helper()
 
-	screen := tcell.NewSimulationScreen("UTF-8")
+	screen := newSnapshotScreen()
 	a.tui.SetScreen(screen)
 	screen.SetSize(width, height)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
+		defer close(screen.exited)
 		done <- a.Run(ctx)
 	}()
 
@@ -610,23 +613,13 @@ func startSimulatedTUI(t *testing.T, a *App, width, height int) tcell.Simulation
 	return screen
 }
 
-func waitForScreenText(t *testing.T, screen tcell.SimulationScreen, want string, timeout time.Duration) {
+func waitForScreenText(t *testing.T, screen *snapshotScreen, want string, timeout time.Duration) {
 	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	text := simulatedScreenText(screen)
-	for time.Now().Before(deadline) {
-		text = simulatedScreenText(screen)
-		if strings.Contains(text, want) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := screen.waitForText(ctx, want); err != nil {
+		t.Fatalf("expected screen to contain %q: %v; screen:\n%s", want, err, screen.snapshot())
 	}
-	text = simulatedScreenText(screen)
-	if strings.Contains(text, want) {
-		return
-	}
-	t.Fatalf("expected screen to contain %q; screen:\n%s", want, text)
 }
 
 func waitForCondition(t *testing.T, timeout time.Duration, ok func() bool, failure string) {
@@ -645,7 +638,196 @@ func waitForCondition(t *testing.T, timeout time.Duration, ok func() bool, failu
 	t.Fatal(failure)
 }
 
-func simulatedScreenText(screen tcell.SimulationScreen) string {
+func TestSimulatedScreenSnapshotWaitsForDrawing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		screen := newSnapshotScreen()
+		tui := tview.NewApplication().SetScreen(screen)
+		screen.SetSize(40, 3)
+		tui.SetRoot(tview.NewTextView().SetText("complete snapshot"), true)
+
+		drawing := make(chan struct{})
+		release := make(chan struct{})
+		var firstDraw, releaseOnce sync.Once
+		defer releaseOnce.Do(func() { close(release) })
+		tui.SetBeforeDrawFunc(func(tcell.Screen) bool {
+			firstDraw.Do(func() {
+				close(drawing)
+				<-release
+			})
+			return false
+		})
+		done := make(chan error, 1)
+		go func() { defer close(screen.exited); done <- tui.Run() }()
+		defer func() {
+			tui.Stop()
+			if err := <-done; err != nil {
+				t.Error(err)
+			}
+		}()
+		<-drawing
+
+		captured := make(chan error, 1)
+		go func() { captured <- screen.waitForText(context.Background(), "complete snapshot") }()
+		synctest.Wait()
+		if len(captured) != 0 {
+			t.Error("snapshot read the live cells before the UI finished drawing")
+		}
+		releaseOnce.Do(func() { close(release) })
+		synctest.Wait()
+		if err := <-captured; err != nil {
+			t.Errorf("expected completed frame: %v", err)
+		}
+	})
+}
+
+func TestInitialRefreshRechecksUIStateAfterCacheLoad(t *testing.T) {
+	for _, state := range []string{"unchanged", "query_changed", "sort_changed", "results_arrived", "canceled"} {
+		t.Run(state, func(t *testing.T) {
+			a := newTestApp(t, &mockSystemAdapter{})
+			sortSpec := a.sortSpec
+			cached := model.Entry{Path: "/fixture/cached.txt", Name: "cached.txt", Type: model.TypeFile}
+			if err := startupcache.Save(startupcache.Path(a.cfg), sortSpec, startupcache.EffectiveLimit(a.cfg.MaxResults), store.QueryResult{
+				Entries: []model.Entry{cached}, Total: 1,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			screen := tcell.NewSimulationScreen("UTF-8")
+			a.tui.SetScreen(screen).SetRoot(a.pages, true)
+			screen.SetSize(80, 20)
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				refreshed := make(chan struct{})
+				go func() { a.startInitialRefresh(ctx, sortSpec); close(refreshed) }()
+				synctest.Wait() // Cache loaded; the UI callback is queued, not running.
+				switch state {
+				case "query_changed":
+					a.query = "new search"
+				case "sort_changed":
+					a.sortSpec = sorter.SortSpec{Column: sorter.SortSize, Direction: sorter.Desc}
+				case "results_arrived":
+					a.entries = []model.Entry{{Path: "/fixture/new.txt", Name: "new.txt"}}
+				case "canceled":
+					cancel()
+				}
+				done := make(chan error, 1)
+				go func() { done <- a.tui.Run() }()
+				defer func() {
+					a.tui.Stop()
+					if err := <-done; err != nil {
+						t.Error(err)
+					}
+				}()
+				<-refreshed
+				a.tui.QueueUpdate(func() {
+					if state == "unchanged" {
+						if len(a.entries) != 1 || a.entries[0].Path != cached.Path {
+							t.Errorf("cached preview not applied: %+v", a.entries)
+						}
+					} else {
+						for _, entry := range a.entries {
+							if entry.Path == cached.Path {
+								t.Errorf("stale startup preview applied after %s", state)
+							}
+						}
+					}
+				})
+			})
+		})
+	}
+}
+
+func TestScreenPollingHandlesStalledDrawingAndExit(t *testing.T) {
+	for _, scenario := range []string{"stalled_drawing", "exit_during_wait", "exit_before_wait"} {
+		t.Run(scenario, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				screen := newSnapshotScreen()
+				tui := tview.NewApplication().SetScreen(screen)
+				screen.SetSize(40, 3)
+				tui.SetRoot(tview.NewTextView().SetText("complete snapshot"), true)
+				drawing, release := make(chan struct{}), make(chan struct{})
+				var firstDraw, releaseOnce sync.Once
+				tui.SetBeforeDrawFunc(func(tcell.Screen) bool {
+					firstDraw.Do(func() {
+						close(drawing)
+						if scenario == "stalled_drawing" {
+							<-release
+						}
+					})
+					return false
+				})
+				done := make(chan error, 1)
+				go func() { defer close(screen.exited); done <- tui.Run() }()
+				defer func() {
+					releaseOnce.Do(func() { close(release) })
+					tui.Stop()
+					if err := <-done; err != nil {
+						t.Error(err)
+					}
+				}()
+				<-drawing
+				synctest.Wait()
+
+				want := "not drawn"
+				if scenario == "exit_before_wait" {
+					tui.Stop()
+					<-screen.exited
+					want = "complete snapshot" // A cached match must not hide exit.
+				}
+				timeout := time.Hour
+				if scenario == "stalled_drawing" {
+					timeout = 10 * time.Millisecond
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+				result := make(chan error, 1)
+				go func() { result <- screen.waitForText(ctx, want) }()
+				synctest.Wait()
+				if scenario == "stalled_drawing" {
+					time.Sleep(10 * time.Millisecond) // Virtual time; drawing stays parked.
+				} else if scenario == "exit_during_wait" {
+					tui.Stop()
+				}
+				synctest.Wait()
+				select {
+				case err := <-result:
+					if scenario == "stalled_drawing" {
+						if !errors.Is(err, context.DeadlineExceeded) || screen.snapshot() != "" {
+							t.Errorf("deadline must fire before drawing resumes: err=%v text=%q", err, screen.snapshot())
+						}
+					} else if !errors.Is(err, errSimulatedTUIExited) || ctx.Err() != nil {
+						t.Errorf("exit must return before deadline: err=%v ctx=%v", err, ctx.Err())
+					}
+				default:
+					t.Error("screen polling stayed blocked after deadline or application exit")
+				}
+			})
+		})
+	}
+}
+
+// snapshotScreen captures live cells only in Show, on the drawing goroutine.
+// Pollers read immutable text and never need to queue work on a stalled UI.
+type snapshotScreen struct {
+	tcell.SimulationScreen
+	mu      sync.RWMutex
+	text    string
+	updated chan struct{}
+	exited  chan struct{}
+}
+
+var errSimulatedTUIExited = errors.New("simulated application exited")
+
+func newSnapshotScreen() *snapshotScreen {
+	return &snapshotScreen{
+		SimulationScreen: tcell.NewSimulationScreen("UTF-8"),
+		updated:          make(chan struct{}, 1),
+		exited:           make(chan struct{}),
+	}
+}
+
+func (screen *snapshotScreen) Show() {
+	screen.SimulationScreen.Show()
 	cells, width, height := screen.GetContents()
 	var b strings.Builder
 	for y := 0; y < height; y++ {
@@ -665,5 +847,40 @@ func simulatedScreenText(screen tcell.SimulationScreen) string {
 		}
 		b.WriteByte('\n')
 	}
-	return b.String()
+	screen.mu.Lock()
+	screen.text = b.String()
+	screen.mu.Unlock()
+	select {
+	case screen.updated <- struct{}{}:
+	default:
+	}
+}
+
+func (screen *snapshotScreen) snapshot() string {
+	screen.mu.RLock()
+	defer screen.mu.RUnlock()
+	return screen.text
+}
+
+func (screen *snapshotScreen) waitForText(ctx context.Context, want string) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		select {
+		case <-screen.exited:
+			return errSimulatedTUIExited
+		default:
+		}
+		if strings.Contains(screen.snapshot(), want) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-screen.exited:
+			return errSimulatedTUIExited
+		case <-screen.updated:
+		}
+	}
 }

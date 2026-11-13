@@ -14,14 +14,22 @@ import (
 
 func TestNativeWatcherReportsLossAndDirectoryMoves(t *testing.T) {
 	w := &fileWatcher{events: make(chan fileEvent, 8), overflow: make(chan struct{}, 1), accept: func(path string) bool { return path != "/ignored" }, metrics: &metrics.Counters{}}
-	// FSEvents flags from the SDK: MustScanSubDirs/UserDropped/KernelDropped/
-	// EventIdsWrapped/RootChanged/Mount/Unmount.
-	for _, flag := range []uint32{1, 2, 4, 8, 0x20, 0x40, 0x80} {
+	// Actual stream loss remains global, even for an ignored event path.
+	for _, flag := range []uint32{2, 4, 8} {
 		w.nativeEvent("/fixture", flag)
 		select {
 		case <-w.overflow:
 		default:
 			t.Fatalf("lost native recovery flag %#x", flag)
+		}
+	}
+	for _, flag := range []uint32{1, 0x20, 0x40, 0x80} {
+		w.nativeEvent("/fixture", flag)
+		if len(w.overflow) != 0 {
+			t.Fatalf("scoped flag %#x requested global recovery", flag)
+		}
+		if e := <-w.events; e.path != "/fixture" || !e.discover || !e.scoped {
+			t.Fatalf("missing scoped recovery: %+v", e)
 		}
 	}
 	// ItemIsDir|ItemRenamed: descendants may have no individual events.

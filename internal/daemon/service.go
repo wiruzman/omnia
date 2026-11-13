@@ -48,6 +48,13 @@ const incrementalBatchSize = 128
 const pendingCapacity = 8192
 const startupPreviewMinInterval = time.Minute
 
+type pendingWork uint8
+
+const (
+	discoverChildren pendingWork = 1 << iota
+	checkAncestors               // Scoped work must not descend through replacement symlinks.
+)
+
 type startupPreviewState struct {
 	sortSpec    sorter.SortSpec
 	limit       int
@@ -174,7 +181,7 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 	defer watcher.Close()
 
-	pending := make(map[string]bool) // True requests bounded descendant discovery.
+	pending := make(map[string]pendingWork)
 	var firstPending time.Time
 	draining := false
 	flushTimer := time.NewTimer(time.Hour)
@@ -185,8 +192,9 @@ func (s *Service) Run(ctx context.Context) error {
 	defer statusTicker.Stop()
 	defer triggerTicker.Stop()
 	requestReconcile := func() {
+		s.metrics.GlobalRecoveryRequested(s.indexer.IsRunning())
 		reconcileRequested = true
-		pending = make(map[string]bool) // Release keys and old map capacity.
+		pending = make(map[string]pendingWork) // Release keys and old map capacity.
 		firstPending = time.Time{}
 		draining = false
 		stopTimer(flushTimer)
@@ -222,11 +230,19 @@ func (s *Service) Run(ctx context.Context) error {
 		case event := <-watcher.events:
 			path := event.path
 			if _, exists := pending[path]; !exists && len(pending) >= pendingCapacity {
+				s.metrics.RecoveryEvent(metrics.PendingOverflow)
 				s.metrics.WatcherOverflow()
 				requestReconcile()
 				continue
 			}
-			pending[path] = pending[path] || event.discover
+			work := pending[path]
+			if event.scoped || event.discover {
+				work |= checkAncestors
+			}
+			if event.discover {
+				work |= discoverChildren
+			}
+			pending[path] = work
 			s.metrics.SetPending(len(pending))
 			if firstPending.IsZero() {
 				firstPending = time.Now()
@@ -240,6 +256,7 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 			stats, err := s.flushPending(ctx, pending)
 			if stats.Overflow {
+				s.metrics.RecoveryEvent(metrics.DiscoveryOverflow)
 				s.metrics.WatcherOverflow()
 				requestReconcile()
 			}
@@ -258,7 +275,7 @@ func (s *Service) Run(ctx context.Context) error {
 				}
 			}
 			if len(pending) == 0 {
-				pending = make(map[string]bool)
+				pending = make(map[string]pendingWork)
 				firstPending = time.Time{}
 				draining = false
 			} else {
@@ -327,6 +344,7 @@ func (s *Service) Run(ctx context.Context) error {
 				if err := s.startReindexFromScratch(ctx, "reconciling filesystem event overflow"); err != nil {
 					s.logger.Printf("reconciliation start failed: %v", err)
 				} else {
+					s.metrics.GlobalRecoveryStarted()
 					reconcileRequested, reconciling = false, true
 				}
 			}
@@ -429,7 +447,7 @@ func (s flushStats) hasChanges() bool {
 	return s.Upserts > 0 || s.Deletes > 0
 }
 
-func (s *Service) flushPending(ctx context.Context, pending map[string]bool) (flushStats, error) {
+func (s *Service) flushPending(ctx context.Context, pending map[string]pendingWork) (flushStats, error) {
 	stats := flushStats{}
 	if len(pending) == 0 {
 		return stats, nil
@@ -441,8 +459,9 @@ func (s *Service) flushPending(ctx context.Context, pending map[string]bool) (fl
 		s.metrics.SetPending(len(pending))
 	}()
 	changes := make([]store.Change, 0, min(len(pending), incrementalBatchSize))
+	queuedWork := make([]pendingWork, 0, cap(changes))
 	var readErr error
-	for path, discover := range pending {
+	for path, work := range pending {
 		if stats.Total >= incrementalBatchSize {
 			break
 		}
@@ -455,14 +474,22 @@ func (s *Service) flushPending(ctx context.Context, pending map[string]bool) (fl
 			stats.Skipped++
 			continue
 		}
-		entry, err := s.scanner.EntryFromPath(path, rootForPath(s.cfg.IncludePaths, path))
-		if err == nil && discover && entry.Type == model.TypeDirectory {
+		root := rootForPath(s.cfg.IncludePaths, path)
+		var entry model.Entry
+		var err error
+		if work&checkAncestors != 0 {
+			err = checkDirectoryAncestors(ctx, root, path)
+		}
+		if err == nil {
+			entry, err = s.scanner.EntryFromPath(path, root)
+		}
+		if err == nil && work&discoverChildren != 0 {
 			stats.Overflow, err = s.queueDirectoryChildren(ctx, path, pending)
 			if stats.Overflow {
 				return stats, nil
 			}
 			if err == nil {
-				pending[path] = false
+				pending[path] &^= discoverChildren
 			}
 		}
 		if err != nil && ctx.Err() != nil {
@@ -470,8 +497,10 @@ func (s *Service) flushPending(ctx context.Context, pending map[string]bool) (fl
 		}
 		if err == nil {
 			changes = append(changes, store.Change{Path: path, Entry: &entry})
+			queuedWork = append(queuedWork, pending[path])
 		} else if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 			changes = append(changes, store.Change{Path: path})
+			queuedWork = append(queuedWork, pending[path])
 		} else if os.IsPermission(err) {
 			delete(pending, path)
 			stats.Skipped++
@@ -490,7 +519,9 @@ func (s *Service) flushPending(ctx context.Context, pending map[string]bool) (fl
 	}
 	for i, result := range results {
 		change := changes[i]
-		if result.Complete {
+		// Discovery later in this batch may have added an ancestry check or
+		// descendant discovery. A committed upsert must not discard that work.
+		if result.Complete && pending[change.Path] == queuedWork[i] {
 			delete(pending, change.Path)
 		}
 		if result.Deleted > 0 {
@@ -514,33 +545,99 @@ func (s *Service) flushPending(ctx context.Context, pending map[string]bool) (fl
 	return stats, readErr
 }
 
+// Check from the configured root towards path, stopping before path itself.
+// Lstat(path) alone follows parent symlinks. Returning ENOTDIR lets the existing
+// bounded deletion path discard only descendants that are currently unreachable.
+// No removal intent survives between batches: restored/inaccessible directories
+// are inspected afresh, without following a symlink into an untracked target.
+func checkDirectoryAncestors(ctx context.Context, root, path string) error {
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return err
+	}
+	ancestor := root
+	for relative != "." {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		info, err := os.Lstat(ancestor)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return syscall.ENOTDIR
+		}
+		part, rest, more := strings.Cut(relative, string(filepath.Separator))
+		if !more {
+			return nil
+		}
+		ancestor = filepath.Join(ancestor, part)
+		relative = rest
+	}
+	return nil
+}
+
 // Read only a bounded directory page. Children reuse the existing pending map;
 // no cursor, worker, or recursive in-memory walk is retained across turns.
-func (s *Service) queueDirectoryChildren(ctx context.Context, path string, pending map[string]bool) (bool, error) {
-	f, err := os.Open(path)
+func (s *Service) queueDirectoryChildren(ctx context.Context, path string, pending map[string]pendingWork) (bool, error) {
+	info, err := os.Lstat(path)
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
-	entries, err := f.ReadDir(pendingCapacity + 1)
-	if err != nil && !errors.Is(err, io.EOF) {
+	if info.IsDir() {
+		f, err := os.Open(path)
+		if err != nil {
+			return false, err
+		}
+		defer f.Close()
+		entries, err := f.ReadDir(pendingCapacity + 1)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return false, err
+		}
+		if len(entries) > pendingCapacity {
+			return true, nil
+		}
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			child := filepath.Join(path, entry.Name())
+			if !s.shouldTrackPathChange(child) {
+				continue
+			}
+			if _, exists := pending[child]; !exists && len(pending) >= pendingCapacity {
+				return true, nil
+			}
+			work := pending[child] | checkAncestors
+			if entry.IsDir() {
+				work |= discoverChildren
+			}
+			pending[child] = work
+		}
+	}
+	// Include cached descendants to repair missed removals and type changes.
+	// Queue inspection, not deletion: their ancestors may change before a later
+	// batch, and inaccessible entries must remain cached.
+	cached, err := s.store.PathsUnder(ctx, path, pendingCapacity+1)
+	if err != nil {
 		return false, err
 	}
-	for _, entry := range entries {
+	if len(cached) > pendingCapacity {
+		return true, nil
+	}
+	for _, child := range cached {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		child := filepath.Join(path, entry.Name())
 		if !s.shouldTrackPathChange(child) {
 			continue
 		}
 		if _, exists := pending[child]; !exists && len(pending) >= pendingCapacity {
 			return true, nil
 		}
-		pending[child] = pending[child] || entry.IsDir()
+		pending[child] |= checkAncestors
 	}
-	// More entries than our discovery budget require the existing recovery scan.
-	return len(entries) > pendingCapacity, nil
+	return false, nil
 }
 
 func (s *Service) buildStatus(indexedTotal int, snapshotSeq int64) daemonstate.Status {
@@ -645,7 +742,7 @@ func rootForPath(roots []string, path string) string {
 	best := ""
 	for _, root := range roots {
 		r := filepath.Clean(root)
-		if cleanPath == r || strings.HasPrefix(cleanPath, r+string(os.PathSeparator)) {
+		if pathWithin(r, cleanPath) {
 			if len(r) > len(best) {
 				best = r
 			}

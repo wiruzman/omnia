@@ -44,7 +44,7 @@ func measureCleanupWrites(t *testing.T, entries []model.Entry, singleTransaction
 			return err
 		}
 		defer stmt.Finalize()
-		return st.db.WithTx(func() error {
+		return st.db.WithTx(context.Background(), func() error {
 			ids, err := selectRowIDs(stmt, []any{"/synthetic", int64(currentScan)})
 			if err != nil {
 				return err

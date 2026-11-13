@@ -135,6 +135,13 @@ values are honored, including existing configurations set to 1,000. Resume curso
 are saved only after database commits, not UI progress updates. Legacy checkpoint
 files without a committed cursor restart with a fresh scan ID for safety.
 
+Coalesced subtree changes, root changes, and volume mount/unmount notifications
+recover only the affected configured scope through the existing bounded pending
+work. Cached descendants are checked too, so missed deletions are repaired while
+inaccessible entries are retained. Actual event loss or exhausted delivery,
+pending, or discovery budgets still require a full reconciliation. A new loss
+during a full scan retains a follow-up request rather than silently dropping it.
+
 ## Optional performance history
 
 Set `metrics_enabled` to `true` in your configuration to record aggregate performance

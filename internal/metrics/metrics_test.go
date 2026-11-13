@@ -327,6 +327,12 @@ func TestStrictPrivacyAndRecordBudget(t *testing.T) {
 	r.counters.Preview(987654321*time.Nanosecond, true)
 	r.counters.ScanStarted()
 	r.counters.ScanFinished(2661303, time.Hour)
+	for reason := NativeMustScan; reason <= DiscoveryOverflow; reason++ {
+		r.counters.RecoveryEvent(reason)
+	}
+	r.counters.ScopedRecoveryRequested()
+	r.counters.GlobalRecoveryRequested(true)
+	r.counters.GlobalRecoveryStarted()
 	writeRecord(t, r)
 	got := records(t, r.cfg.MetricsDir())
 	data, err := json.Marshal(got[0])

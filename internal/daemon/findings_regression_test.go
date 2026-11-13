@@ -44,7 +44,7 @@ func TestStaleChildDoesNotPoisonValidChanges(t *testing.T) {
 	if err := os.WriteFile(good, []byte("fixture"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	pending := map[string]bool{child: false, good: false}
+	pending := map[string]pendingWork{child: 0, good: 0}
 	stats, err := svc.flushPending(context.Background(), pending)
 	if err != nil || stats.Inserted != 1 || stats.Deletes != 1 || len(pending) != 0 {
 		t.Fatalf("stale child blocked batch: %+v pending=%d err=%v", stats, len(pending), err)
@@ -62,7 +62,7 @@ func TestPathReadFailureDoesNotAbortOtherChanges(t *testing.T) {
 	if err := os.WriteFile(good, []byte("fixture"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	pending := map[string]bool{bad: false, good: false}
+	pending := map[string]pendingWork{bad: 0, good: 0}
 	stats, err := svc.flushPending(context.Background(), pending)
 	if err == nil || stats.Inserted != 1 || stats.Failures != 1 || len(pending) != 1 {
 		t.Fatalf("read failure poisoned batch: %+v pending=%d err=%v", stats, len(pending), err)
@@ -185,9 +185,9 @@ func TestDirectoryDiscoveryRespectsPendingCapacity(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "child.txt"), []byte("fixture"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	pending := map[string]bool{directory: true}
+	pending := map[string]pendingWork{directory: discoverChildren}
 	for i := 1; i < pendingCapacity; i++ {
-		pending[filepath.Join(root, fmt.Sprintf("queued-%06d", i))] = false
+		pending[filepath.Join(root, fmt.Sprintf("queued-%06d", i))] = 0
 	}
 	overflow, err := svc.queueDirectoryChildren(context.Background(), directory, pending)
 	if err != nil || !overflow || len(pending) != pendingCapacity {
@@ -204,7 +204,7 @@ func TestDirectoryDiscoverySurvivesBatchRollback(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "nested", "child.txt"), []byte("fixture"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	pending := map[string]bool{directory: true}
+	pending := map[string]pendingWork{directory: discoverChildren}
 	original := svc.store
 	svc.store = failingChangeStore{original}
 	if _, err := svc.flushPending(context.Background(), pending); err == nil || len(pending) == 0 {

@@ -13,11 +13,12 @@ import "C"
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -37,6 +38,13 @@ type sqliteStmt struct {
 	db   *sqliteDB
 	stmt *C.sqlite3_stmt
 }
+
+type sqliteExecError struct {
+	code    int
+	message string
+}
+
+func (e *sqliteExecError) Error() string { return "sqlite exec failed: " + e.message }
 
 func OpenSQLite(path string) (*SQLiteStore, error) {
 	path = filepath.Clean(path)
@@ -87,7 +95,7 @@ func (s *SQLiteStore) UpsertBatch(ctx context.Context, scanID int64, batch []mod
 		return err
 	}
 	defer w.close()
-	return s.db.WithTx(func() error {
+	return s.db.WithTx(ctx, func() error {
 		for _, entry := range batch {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -291,7 +299,7 @@ func (s *SQLiteStore) DeletePath(ctx context.Context, path string) error {
 		return err
 	}
 	defer w.close()
-	return s.db.WithTx(func() error {
+	return s.db.WithTx(ctx, func() error {
 		rowID, _, exists, err := lookupEntry(w.lookup, filepath.Clean(path))
 		if err != nil || !exists {
 			return err
@@ -346,7 +354,7 @@ func (s *SQLiteStore) DeletePathPrefixCount(ctx context.Context, dirPath string)
 	defer deleteEntryStmt.Finalize()
 
 	deleted := 0
-	err = s.db.WithTx(func() error {
+	err = s.db.WithTx(ctx, func() error {
 		rowIDs, err := selectRowIDs(selectStmt, args)
 		if err != nil {
 			return err
@@ -445,7 +453,7 @@ func (s *SQLiteStore) isContentlessFTSTable(name string) (bool, bool, error) {
 func (s *SQLiteStore) rebuildContentlessFTS(name, column string) error {
 	createSQL := fmt.Sprintf("CREATE VIRTUAL TABLE %s USING fts5(%s, content='', contentless_delete=1, tokenize = 'trigram');", name, column)
 	rebuildSQL := fmt.Sprintf("INSERT INTO %s(rowid, %s) SELECT rowid, %s FROM entries;", name, column, column)
-	return s.db.WithTx(func() error {
+	return s.db.WithTx(context.Background(), func() error {
 		if err := s.db.Exec("DROP TABLE IF EXISTS " + name + ";"); err != nil {
 			return err
 		}
@@ -630,7 +638,7 @@ func (d *sqliteDB) Exec(sql string) error {
 			msg = C.GoString(errMsg)
 			C.sqlite3_free(unsafe.Pointer(errMsg))
 		}
-		return fmt.Errorf("sqlite exec failed: %s", msg)
+		return &sqliteExecError{code: int(rc), message: msg}
 	}
 	return nil
 }
@@ -646,25 +654,52 @@ func (d *sqliteDB) Prepare(sql string) (*sqliteStmt, error) {
 	return &sqliteStmt{db: d, stmt: stmt}, nil
 }
 
-func (d *sqliteDB) WithTx(fn func() error) error {
+func (d *sqliteDB) WithTx(ctx context.Context, fn func() error) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if C.sqlite3_get_autocommit(d.db) == 0 {
+		return fmt.Errorf("sqlite transaction already active")
+	}
+	stopInterrupt := d.interruptOnCancel(ctx)
+	// Install cleanup before BEGIN: even an interrupted BEGIN can open a
+	// transaction. No cancellation callback may race with rollback or reuse.
+	defer func() {
+		stopInterrupt()
+		if C.sqlite3_get_autocommit(d.db) == 0 {
+			if rollbackErr := d.rollback(); rollbackErr != nil {
+				err = errors.Join(err, fmt.Errorf("rollback sqlite transaction: %w", rollbackErr))
+			}
+		}
+		if err != nil && ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+			err = errors.Join(ctx.Err(), err)
+		}
+	}()
 	if err := d.Exec("BEGIN IMMEDIATE;"); err != nil {
 		return err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = d.Exec("ROLLBACK;")
-		}
-	}()
-
 	if err := fn(); err != nil {
 		return err
 	}
-	if err := d.Exec("COMMIT;"); err != nil {
+	stopInterrupt()
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	committed = true
-	return nil
+	return d.Exec("COMMIT;")
+}
+
+func (d *sqliteDB) rollback() error {
+	err := d.Exec("ROLLBACK;")
+	var execErr *sqliteExecError
+	if errors.As(err, &execErr) && execErr.code == int(C.SQLITE_INTERRUPT) {
+		// ROLLBACK may have completed despite SQLITE_INTERRUPT. If not, one
+		// retry is sufficient now that our cancellation callback has finished.
+		if C.sqlite3_get_autocommit(d.db) != 0 {
+			return nil
+		}
+		return d.Exec("ROLLBACK;")
+	}
+	return err
 }
 
 func (d *sqliteDB) LastInsertRowID() int64 {
@@ -683,23 +718,27 @@ func (d *sqliteDB) errorf(operation string) error {
 }
 
 func (d *sqliteDB) interruptOnCancel(ctx context.Context) func() {
-	done := make(chan struct{})
-	var stopped atomic.Bool
-	go func() {
-		select {
-		case <-ctx.Done():
-			if stopped.Load() {
-				return
-			}
-			if d != nil && d.db != nil {
-				C.sqlite3_interrupt(d.db)
-			}
-		case <-done:
+	return sqliteInterruptOnCancel(ctx, func() {
+		if d != nil && d.db != nil {
+			C.sqlite3_interrupt(d.db)
 		}
-	}()
+	})
+}
+
+// The returned stop function is idempotent and joins an in-flight callback.
+func sqliteInterruptOnCancel(ctx context.Context, interrupt func()) func() {
+	finished := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(finished)
+		interrupt()
+	})
+	var once sync.Once
 	return func() {
-		stopped.Store(true)
-		close(done)
+		once.Do(func() {
+			if !stop() {
+				<-finished
+			}
+		})
 	}
 }
 

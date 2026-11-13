@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/wiruzman/omnia/internal/config"
+	"github.com/wiruzman/omnia/internal/model"
 )
 
 func TestFullScanDefaultBatchReducesCumulativeWrites(t *testing.T) {
@@ -40,7 +41,14 @@ func TestFullScanDefaultBatchReducesCumulativeWrites(t *testing.T) {
 			}
 			return nil
 		})
-		if n, err := st.countWhere(ctx, "last_seen_scan = ?", []any{int64(1700001000000000)}); err != nil || n != len(seed) {
+		stmt, err := st.db.Prepare("SELECT count(*) FROM scan_markers WHERE last_seen_scan=1700001000000000;")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = stmt.Step()
+		n := int(stmt.ColumnInt64(0))
+		stmt.Finalize()
+		if err != nil || n != len(seed) {
 			t.Fatalf("marker refresh lost entries: count=%d err=%v", n, err)
 		}
 		volumes = append(volumes, volume)
@@ -52,5 +60,109 @@ func TestFullScanDefaultBatchReducesCumulativeWrites(t *testing.T) {
 	}
 	if baseline.hasIO && optimized.hasIO && optimized.logical > baseline.logical*2/3 {
 		t.Fatalf("full-scan logical-write reduction regressed: %v", volumes)
+	}
+}
+
+// Frozen old marker refresh: same row lookup and transaction boundaries, but
+// stamps the generation in the wide entry table and its root/scan index.
+func legacyRefreshMarkers(st *SQLiteStore, scanID int64, batch []model.Entry) error {
+	lookup, err := st.db.Prepare("SELECT rowid,path,name,parent_path,root_path,type,size,created_at,modified_at FROM entries WHERE path=?;")
+	if err != nil {
+		return err
+	}
+	defer lookup.Finalize()
+	seen, err := st.db.Prepare("UPDATE entries SET last_seen_scan=? WHERE rowid=? AND last_seen_scan!=?;")
+	if err != nil {
+		return err
+	}
+	defer seen.Finalize()
+	return st.db.WithTx(context.Background(), func() error {
+		for _, entry := range batch {
+			id, _, _, err := lookupEntry(lookup, entry.Path)
+			if err != nil {
+				return err
+			}
+			for i, value := range []int64{scanID, id, scanID} {
+				if err := seen.BindInt64(i+1, value); err != nil {
+					return err
+				}
+			}
+			if err := seen.StepDone(); err != nil {
+				return err
+			}
+			seen.Reset()
+		}
+		return nil
+	})
+}
+
+func TestCompactScanMarkersReduceCumulativeWrites(t *testing.T) {
+	ctx := context.Background()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, layout := range []string{"scattered", "ordered"} {
+		t.Run(layout, func(t *testing.T) {
+			seed := shuffledWriteEntries(24000) // Cross the production batch cap.
+			ordered := slices.Clone(seed)
+			sort.Slice(ordered, func(i, j int) bool { return ordered[i].Path < ordered[j].Path })
+			if layout == "ordered" {
+				seed = ordered
+			}
+			var volumes []writeVolume
+			for _, legacy := range []bool{true, false} {
+				path := filepath.Join(t.TempDir(), "index.sqlite")
+				var st *SQLiteStore
+				if legacy {
+					st = legacyMarkerStore(t, path)
+				} else {
+					st, err = OpenSQLite(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { st.Close() })
+				}
+				for i := 0; i < len(seed); i += 1000 {
+					batch := seed[i:min(i+1000, len(seed))]
+					if legacy {
+						err = legacyInsertBatch(st, 1700000000000000, batch)
+					} else {
+						err = st.UpsertBatch(ctx, 1700000000000000, batch)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				volume := measureWriteVolume(t, st, path, func() error {
+					for i := 0; i < len(ordered); i += cfg.ScanBatchSize {
+						batch := ordered[i:min(i+cfg.ScanBatchSize, len(ordered))]
+						if legacy {
+							err = legacyRefreshMarkers(st, 1700001000000000, batch)
+						} else {
+							err = st.UpsertBatch(ctx, 1700001000000000, batch)
+						}
+						if err != nil {
+							return err
+						}
+					}
+					return nil
+				})
+				table := "entries"
+				if !legacy {
+					table = "scan_markers"
+					assertMarkerIntegrity(t, st)
+				}
+				if n := markerScalar(t, st, "SELECT count(*) FROM "+table+" WHERE last_seen_scan=1700001000000000;"); n != int64(len(seed)) {
+					t.Fatalf("lost scan markers: %d", n)
+				}
+				volumes = append(volumes, volume)
+			}
+			old, compact := volumes[0], volumes[1]
+			t.Logf("cumulative WAL bytes: legacy=%d compact=%d; logical bytes including final checkpoint: legacy=%d compact=%d", old.wal, compact.wal, old.logical, compact.logical)
+			if compact.wal > old.wal/2 || old.hasIO && compact.hasIO && compact.logical > old.logical/2 {
+				t.Fatalf("compact-marker write reduction regressed: %v", volumes)
+			}
+		})
 	}
 }

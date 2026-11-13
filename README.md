@@ -124,8 +124,10 @@ bounded. Overflow requests a full reconciliation instead of silently losing
 changes. Directory creation and moves discover only their affected subtree. The
 native macOS watcher keeps no lifetime history of observed paths.
 
-Full scans refresh only the scan marker for unchanged entries, avoiding metadata
-and search-index churn. Stale-entry cleanup commits in batches of at most 16,384 rows
+Full scans refresh a separate compact scan-marker table for unchanged entries,
+avoiding writes to wide metadata rows and search indexes. Entry changes and their
+markers commit atomically; deleting an entry also deletes its marker.
+Stale-entry cleanup commits in batches of at most 16,384 rows
 and honors cancellation. Existing entries beneath unreadable paths are preserved
 using the same scan marker, including across interruption/resume; intentionally
 excluded or genuinely missing paths remain eligible for cleanup.
@@ -134,6 +136,14 @@ Full scans default to 16,384 entries per transaction. Explicit `scan_batch_size`
 values are honored, including existing configurations set to 1,000. Resume cursors
 are saved only after database commits, not UI progress updates. Legacy checkpoint
 files without a committed cursor restart with a fresh scan ID for safety.
+
+Existing indexes migrate automatically on the next writable open. Migration is
+transactional and preserves entry row IDs, scan generations, search indexes, and
+saved resume cursors. Removing the old marker column rewrites the entry table
+once, so allow temporary disk/WAL headroom during that first startup. Subsequent
+opens do not repeat the migration. Older writers cannot use the migrated schema;
+retain a pre-upgrade index backup if a writer downgrade is needed. The read-only
+CLI can read either schema without migrating it.
 
 Coalesced subtree changes, root changes, and volume mount/unmount notifications
 recover only the affected configured scope through the existing bounded pending

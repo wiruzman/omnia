@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -19,9 +18,8 @@ func TestFullScanUnchangedUpdatesOnlyScanMarker(t *testing.T) {
 	if err := st.UpsertBatch(ctx, 1, []model.Entry{entry}); err != nil {
 		t.Fatal(err)
 	}
-	// Mentioning unchanged metadata columns in UPDATE still maintains their
-	// secondary indexes. Fail if a full scan touches any of those columns.
-	if err := st.db.Exec(`CREATE TRIGGER reject_metadata_update BEFORE UPDATE OF path_lower,name,name_lower,parent_path,root_path,type,size,created_at,modified_at ON entries BEGIN SELECT RAISE(ABORT,'metadata rewritten'); END;`); err != nil {
+	// Unchanged entries must not rewrite any part of the wide metadata row.
+	if err := st.db.Exec(`CREATE TRIGGER reject_metadata_update BEFORE UPDATE ON entries BEGIN SELECT RAISE(ABORT,'metadata rewritten'); END;`); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.UpsertBatch(ctx, 2, []model.Entry{entry}); err != nil {
@@ -180,68 +178,6 @@ func TestMarkSubtreeSeenPreservesOnlySubtreeAcrossReopen(t *testing.T) {
 	}
 }
 
-func TestFullScanMarkerUpdateReducesWAL(t *testing.T) {
-	ctx := context.Background()
-	entries := changeEntries(4000)
-	var sizes []int64
-	for _, legacy := range []bool{true, false} {
-		path := filepath.Join(t.TempDir(), "index.sqlite")
-		st, err := OpenSQLite(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { st.Close() })
-		if err := st.UpsertBatch(ctx, 1700000000000000, entries); err != nil {
-			t.Fatal(err)
-		}
-		if err := st.db.Exec("PRAGMA wal_autocheckpoint=0; PRAGMA wal_checkpoint(TRUNCATE);"); err != nil {
-			t.Fatal(err)
-		}
-		for start := 0; start < len(entries); start += 1000 {
-			batch := entries[start:min(start+1000, len(entries))]
-			if !legacy {
-				if err := st.UpsertBatch(ctx, 1700001000000000, batch); err != nil {
-					t.Fatal(err)
-				}
-				continue
-			}
-			w, err := newEntryWriter(st.db)
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = st.db.WithTx(context.Background(), func() error {
-				for _, e := range batch {
-					id, _, _, err := lookupEntry(w.lookup, e.Path)
-					if err != nil {
-						return err
-					}
-					if err := bindUpdateEntry(w.update, e, 1700001000000000, id); err != nil {
-						return err
-					}
-					if err := w.update.StepDone(); err != nil {
-						return err
-					}
-					w.update.Reset()
-				}
-				return nil
-			})
-			w.close()
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-		info, err := os.Stat(path + "-wal")
-		if err != nil {
-			t.Fatal(err)
-		}
-		sizes = append(sizes, info.Size())
-	}
-	t.Logf("WAL bytes: legacy=%d marker_only=%d", sizes[0], sizes[1])
-	if sizes[1] >= sizes[0]*3/4 {
-		t.Fatalf("write reduction regressed: %v", sizes)
-	}
-}
-
 func TestMarkSubtreeSeenCancellationIsBoundedAndRetryable(t *testing.T) {
 	st := changeStore(t)
 	ctx := context.Background()
@@ -255,7 +191,13 @@ func TestMarkSubtreeSeenCancellationIsBoundedAndRetryable(t *testing.T) {
 	if err := st.MarkSubtreeSeen(canceled, 2, "/fixture/directory"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error=%v", err)
 	}
-	seen, err := st.countWhere(ctx, "last_seen_scan = ?", []any{int64(2)})
+	stmt, err := st.db.Prepare("SELECT count(*) FROM scan_markers WHERE last_seen_scan=2;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = stmt.Step()
+	seen := int(stmt.ColumnInt64(0))
+	stmt.Finalize()
 	if err != nil || seen != scanProtectionBatchSize {
 		t.Fatalf("partial protection batch: seen=%d err=%v", seen, err)
 	}
@@ -279,7 +221,7 @@ func TestCleanupStaleCursorAcrossScanIDsAndRoots(t *testing.T) {
 	if err := st.UpsertBatch(ctx, 1, append(entries, foreign)); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.db.Exec("UPDATE entries SET last_seen_scan = rowid % 3;"); err != nil {
+	if err := st.db.Exec("UPDATE scan_markers SET last_seen_scan = entry_id % 3;"); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.CleanupStale(ctx, 2, []string{"/fixture"}); err != nil {

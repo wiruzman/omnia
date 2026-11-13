@@ -12,7 +12,7 @@ const scanCleanupBatchSize = 16 * 1024
 const scanProtectionBatchSize = 128
 const firstScanCursor int64 = -1 << 63
 
-// CleanupStale walks the root/scan index with a keyset cursor. Each transaction
+// CleanupStale walks the compact root/scan index with a keyset cursor. Each transaction
 // holds at most one batch, not every stale row or a root-sized transaction.
 // Earlier batches remain committed if a later batch fails or is canceled.
 func (s *SQLiteStore) CleanupStale(ctx context.Context, scanID int64, roots []string) error {
@@ -24,9 +24,9 @@ func (s *SQLiteStore) CleanupStale(ctx context.Context, scanID int64, roots []st
 		return err
 	}
 	defer w.close()
-	stmt, err := s.db.Prepare(`SELECT rowid, last_seen_scan FROM entries
-		WHERE root_path = ? AND last_seen_scan != ? AND (last_seen_scan, rowid) > (?, ?)
-		ORDER BY last_seen_scan, rowid LIMIT ?;`)
+	stmt, err := s.db.Prepare(`SELECT entry_id, last_seen_scan FROM scan_markers
+		WHERE root_path = ? AND last_seen_scan != ? AND (last_seen_scan, entry_id) > (?, ?)
+		ORDER BY last_seen_scan, entry_id LIMIT ?;`)
 	if err != nil {
 		return err
 	}

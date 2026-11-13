@@ -114,6 +114,13 @@ accounting, not a measurement of physical SSD NAND wear. They include SQLite,
 status/log writes, and the metrics recorder's own overhead. Unsupported/failed
 measurements and unavailable file sizes are `null`, not fabricated zeros.
 
+Unchanged full-scan entries update a compact scan-marker table, not their wide
+metadata rows or search indexes. Markers also retain inaccessible entries across
+interrupted/resumed scans. The first writable open of an older index migrates its
+markers transactionally and removes the old entry-table column; that one-time
+rewrite contributes to startup I/O. Compare later reconciliation runs separately
+from migration. No metrics fields or recording defaults change with this schema.
+
 ## Time, restarts, and daily totals
 
 Records include UTC `timestamp`, `process_started_at`, and a process-local

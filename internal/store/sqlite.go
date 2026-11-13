@@ -374,12 +374,19 @@ func (s *SQLiteStore) DeletePathPrefixCount(ctx context.Context, dirPath string)
 }
 
 func (s *SQLiteStore) setup() error {
-	statements := []string{
+	for _, statement := range []string{
 		"PRAGMA journal_mode = WAL;",
 		"PRAGMA synchronous = NORMAL;",
 		"PRAGMA temp_store = MEMORY;",
 		"PRAGMA busy_timeout = 5000;",
-		`CREATE TABLE IF NOT EXISTS entries (
+	} {
+		if err := s.db.Exec(statement); err != nil {
+			return err
+		}
+	}
+	if err := s.db.WithTx(context.Background(), func() error {
+		if err := s.db.Exec(
+			`CREATE TABLE IF NOT EXISTS entries (
 			path TEXT NOT NULL UNIQUE,
 			path_lower TEXT NOT NULL,
 			name TEXT NOT NULL,
@@ -389,24 +396,32 @@ func (s *SQLiteStore) setup() error {
 			type TEXT NOT NULL,
 			size INTEGER NOT NULL,
 			created_at INTEGER NOT NULL,
-			modified_at INTEGER NOT NULL,
-			last_seen_scan INTEGER NOT NULL
-		);`,
-		"CREATE INDEX IF NOT EXISTS entries_name_lower_idx ON entries(name_lower, path_lower);",
-		"CREATE INDEX IF NOT EXISTS entries_path_lower_idx ON entries(path_lower);",
-		"CREATE INDEX IF NOT EXISTS entries_modified_idx ON entries(modified_at, path_lower);",
-		"CREATE INDEX IF NOT EXISTS entries_modified_desc_idx ON entries(modified_at DESC, path_lower ASC);",
-		"CREATE INDEX IF NOT EXISTS entries_created_idx ON entries(created_at, path_lower);",
-		"CREATE INDEX IF NOT EXISTS entries_created_desc_idx ON entries(created_at DESC, path_lower ASC);",
-		"CREATE INDEX IF NOT EXISTS entries_size_idx ON entries(size, path_lower);",
-		"CREATE INDEX IF NOT EXISTS entries_size_desc_idx ON entries(size DESC, path_lower ASC);",
-		"CREATE INDEX IF NOT EXISTS entries_name_lower_desc_idx ON entries(name_lower DESC, path_lower ASC);",
-		"CREATE INDEX IF NOT EXISTS entries_root_scan_idx ON entries(root_path, last_seen_scan);",
-	}
-	for _, statement := range statements {
-		if err := s.db.Exec(statement); err != nil {
+			modified_at INTEGER NOT NULL
+		);`); err != nil {
 			return err
 		}
+		if err := s.migrateScanMarkers(); err != nil {
+			return err
+		}
+		for _, statement := range []string{
+			"CREATE INDEX IF NOT EXISTS entries_name_lower_idx ON entries(name_lower, path_lower);",
+			"CREATE INDEX IF NOT EXISTS entries_path_lower_idx ON entries(path_lower);",
+			"CREATE INDEX IF NOT EXISTS entries_modified_idx ON entries(modified_at, path_lower);",
+			"CREATE INDEX IF NOT EXISTS entries_modified_desc_idx ON entries(modified_at DESC, path_lower ASC);",
+			"CREATE INDEX IF NOT EXISTS entries_created_idx ON entries(created_at, path_lower);",
+			"CREATE INDEX IF NOT EXISTS entries_created_desc_idx ON entries(created_at DESC, path_lower ASC);",
+			"CREATE INDEX IF NOT EXISTS entries_size_idx ON entries(size, path_lower);",
+			"CREATE INDEX IF NOT EXISTS entries_size_desc_idx ON entries(size DESC, path_lower ASC);",
+			"CREATE INDEX IF NOT EXISTS entries_name_lower_desc_idx ON entries(name_lower DESC, path_lower ASC);",
+			"CREATE INDEX IF NOT EXISTS entries_root_idx ON entries(root_path);",
+		} {
+			if err := s.db.Exec(statement); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	return s.ensureContentlessFTS()
 }
@@ -874,7 +889,7 @@ func collectRowIDs(stmt *sqliteStmt) ([]int64, error) {
 	return rowIDs, nil
 }
 
-func bindInsertEntry(stmt *sqliteStmt, entry model.Entry, scanID int64) error {
+func bindInsertEntry(stmt *sqliteStmt, entry model.Entry) error {
 	if err := stmt.BindText(1, filepath.Clean(entry.Path)); err != nil {
 		return err
 	}
@@ -902,13 +917,10 @@ func bindInsertEntry(stmt *sqliteStmt, entry model.Entry, scanID int64) error {
 	if err := stmt.BindInt64(9, entry.CreatedAt.Unix()); err != nil {
 		return err
 	}
-	if err := stmt.BindInt64(10, entry.ModifiedAt.Unix()); err != nil {
-		return err
-	}
-	return stmt.BindInt64(11, scanID)
+	return stmt.BindInt64(10, entry.ModifiedAt.Unix())
 }
 
-func bindUpdateEntry(stmt *sqliteStmt, entry model.Entry, scanID int64, rowID int64) error {
+func bindUpdateEntry(stmt *sqliteStmt, entry model.Entry, rowID int64) error {
 	if err := stmt.BindText(1, strings.ToLower(filepath.Clean(entry.Path))); err != nil {
 		return err
 	}
@@ -936,10 +948,7 @@ func bindUpdateEntry(stmt *sqliteStmt, entry model.Entry, scanID int64, rowID in
 	if err := stmt.BindInt64(9, entry.ModifiedAt.Unix()); err != nil {
 		return err
 	}
-	if err := stmt.BindInt64(10, scanID); err != nil {
-		return err
-	}
-	return stmt.BindInt64(11, rowID)
+	return stmt.BindInt64(10, rowID)
 }
 
 func insertFTSRows(nameStmt, pathStmt *sqliteStmt, rowID int64, entry model.Entry) error {

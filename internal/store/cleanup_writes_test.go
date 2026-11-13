@@ -25,7 +25,7 @@ func measureCleanupWrites(t *testing.T, entries []model.Entry, singleTransaction
 			t.Fatal(err)
 		}
 	}
-	if err := st.db.Exec(fmt.Sprintf("UPDATE entries SET last_seen_scan=%d WHERE rowid%%2=0;", currentScan)); err != nil {
+	if err := st.db.Exec(fmt.Sprintf("UPDATE scan_markers SET last_seen_scan=%d WHERE entry_id%%2=0;", currentScan)); err != nil {
 		t.Fatal(err)
 	}
 	writes := measureWriteVolume(t, st, path, func() error {
@@ -39,7 +39,7 @@ func measureCleanupWrites(t *testing.T, entries []model.Entry, singleTransaction
 			return err
 		}
 		defer w.close()
-		stmt, err := st.db.Prepare("SELECT rowid FROM entries WHERE root_path=? AND last_seen_scan!=? ORDER BY last_seen_scan,rowid;")
+		stmt, err := st.db.Prepare("SELECT entry_id FROM scan_markers WHERE root_path=? AND last_seen_scan!=? ORDER BY last_seen_scan,entry_id;")
 		if err != nil {
 			return err
 		}

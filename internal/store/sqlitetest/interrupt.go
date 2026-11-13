@@ -32,6 +32,15 @@ static interruption *arm_interrupt(sqlite3 *db, int autocommit, int times) {
 	sqlite3_progress_handler(db, 1, interrupt_transaction, state);
 	return state;
 }
+
+static int deny_alter(void *unused, int action, const char *a, const char *b,
+                      const char *database, const char *source) {
+	return action == SQLITE_ALTER_TABLE ? SQLITE_DENY : SQLITE_OK;
+}
+
+static void deny_alter_table(sqlite3 *db) {
+	sqlite3_set_authorizer(db, deny_alter, NULL);
+}
 */
 import "C"
 
@@ -54,4 +63,11 @@ func InterruptOnAutoCommit(db unsafe.Pointer, enabled bool, times int) (fired fu
 
 func AutoCommit(db unsafe.Pointer) bool {
 	return C.sqlite3_get_autocommit((*C.sqlite3)(db)) != 0
+}
+
+// DenyAlterTable injects a deterministic failure after migration has copied its
+// data, without changing the schema or crashing a process mid-transaction.
+func DenyAlterTable(db unsafe.Pointer) func() {
+	C.deny_alter_table((*C.sqlite3)(db))
+	return func() { C.sqlite3_set_authorizer((*C.sqlite3)(db), nil, nil) }
 }

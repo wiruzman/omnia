@@ -136,6 +136,15 @@ func TestUnreadableProtectionSurvivesInterruptedScanResume(t *testing.T) {
 	if err != nil || resume.CurrentPath <= blocked || wrapper.protected != 1 {
 		t.Fatalf("bad interrupted checkpoint: %+v protection=%d err=%v", resume, wrapper.protected, err)
 	}
+	// Model a process interruption, not just another scan on the same connection.
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err = store.OpenSQLite(cfg.IndexDBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel2()
 	idx2 := New(cfg, scanner.New(nil), st, log.New(io.Discard, "", 0))

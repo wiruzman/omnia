@@ -15,7 +15,7 @@ import (
 type entryWriter struct {
 	lookup                 *sqliteStmt
 	insert, update         *sqliteStmt
-	seen                   *sqliteStmt
+	seen, setMarker        *sqliteStmt
 	deleteName, deletePath *sqliteStmt
 	insertName, insertPath *sqliteStmt
 	prefixes, deleteEntry  *sqliteStmt
@@ -29,9 +29,12 @@ func newEntryWriter(db *sqliteDB) (*entryWriter, error) {
 		sql    string
 	}{
 		{&w.lookup, "SELECT rowid, path, name, parent_path, root_path, type, size, created_at, modified_at FROM entries WHERE path = ?;"},
-		{&w.insert, `INSERT INTO entries (path, path_lower, name, name_lower, parent_path, root_path, type, size, created_at, modified_at, last_seen_scan) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`},
-		{&w.update, `UPDATE entries SET path_lower = ?, name = ?, name_lower = ?, parent_path = ?, root_path = ?, type = ?, size = ?, created_at = ?, modified_at = ?, last_seen_scan = ? WHERE rowid = ?;`},
-		{&w.seen, "UPDATE entries SET last_seen_scan = ? WHERE rowid = ? AND last_seen_scan != ?;"},
+		{&w.insert, `INSERT INTO entries (path, path_lower, name, name_lower, parent_path, root_path, type, size, created_at, modified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`},
+		{&w.update, `UPDATE entries SET path_lower = ?, name = ?, name_lower = ?, parent_path = ?, root_path = ?, type = ?, size = ?, created_at = ?, modified_at = ? WHERE rowid = ?;`},
+		{&w.seen, "UPDATE scan_markers SET last_seen_scan = ? WHERE entry_id = ? AND last_seen_scan != ?;"},
+		{&w.setMarker, `INSERT INTO scan_markers(entry_id, root_path, last_seen_scan) VALUES (?, ?, ?)
+			ON CONFLICT(entry_id) DO UPDATE SET root_path=excluded.root_path, last_seen_scan=excluded.last_seen_scan
+			WHERE scan_markers.root_path != excluded.root_path OR scan_markers.last_seen_scan != excluded.last_seen_scan;`},
 		{&w.deleteName, "DELETE FROM name_fts WHERE rowid = ?;"},
 		{&w.deletePath, "DELETE FROM path_fts WHERE rowid = ?;"},
 		{&w.insertName, "INSERT INTO name_fts(rowid, name_lower) VALUES (?, ?);"},
@@ -74,7 +77,7 @@ func (w *entryWriter) upsert(entry model.Entry, scanID int64, skipUnchanged bool
 				return UpsertEntryResult{}, err
 			}
 		}
-		if err := bindUpdateEntry(w.update, entry, scanID, rowID); err != nil {
+		if err := bindUpdateEntry(w.update, entry, rowID); err != nil {
 			return UpsertEntryResult{}, err
 		}
 		if err := w.update.StepDone(); err != nil {
@@ -82,7 +85,7 @@ func (w *entryWriter) upsert(entry model.Entry, scanID int64, skipUnchanged bool
 		}
 		w.update.Reset()
 	} else {
-		if err := bindInsertEntry(w.insert, entry, scanID); err != nil {
+		if err := bindInsertEntry(w.insert, entry); err != nil {
 			return UpsertEntryResult{}, err
 		}
 		if err := w.insert.StepDone(); err != nil {
@@ -95,6 +98,15 @@ func (w *entryWriter) upsert(entry model.Entry, scanID int64, skipUnchanged bool
 		if err := insertFTSRows(w.insertName, w.insertPath, rowID, entry); err != nil {
 			return UpsertEntryResult{}, err
 		}
+	}
+	defer w.setMarker.Reset()
+	for i, value := range []any{rowID, filepath.Clean(entry.RootPath), scanID} {
+		if err := bindSQLiteAny(w.setMarker, i+1, value); err != nil {
+			return UpsertEntryResult{}, err
+		}
+	}
+	if err := w.setMarker.StepDone(); err != nil {
+		return UpsertEntryResult{}, err
 	}
 	return UpsertEntryResult{Changed: true, Inserted: !exists}, nil
 }

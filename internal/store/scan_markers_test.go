@@ -144,6 +144,7 @@ func TestScanMarkerMigrationPreservesRowsSearchAndGenerations(t *testing.T) {
 	}
 	defer st.Close()
 	assertMarkerIntegrity(t, st)
+	assertStaticMarkerSchema(t, st)
 	if markerScalar(t, st, "PRAGMA user_version;") != scanMarkerSchemaVersion {
 		t.Fatal("schema version not advanced")
 	}
@@ -199,6 +200,9 @@ func TestScanMarkerMigrationFailureRollsBackAndRetries(t *testing.T) {
 	if err == nil {
 		t.Fatal("migration should fail at ALTER after copying markers")
 	}
+	if markerScalar(t, st, "PRAGMA temp_store;") != 2 {
+		t.Fatal("failed legacy migration did not restore runtime storage")
+	}
 	if markerScalar(t, st, "PRAGMA user_version;") != 0 || markerScalar(t, st, "SELECT count(*) FROM entries WHERE last_seen_scan=7;") != 3 {
 		t.Fatal("failed migration changed legacy data")
 	}
@@ -245,45 +249,71 @@ func TestScanMarkerMigrationAlsoSupportsOlderFTSSchema(t *testing.T) {
 }
 
 func TestMigratedMarkersPreserveProtectionAcrossResume(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "index.sqlite")
-	old := legacyMarkerStore(t, path)
-	entries := changeEntries(3)
-	if err := legacyInsertBatch(old, 2, entries[:2]); err != nil {
-		t.Fatal(err)
-	} // Ordinary and unreadable entries already protected before interruption.
-	if err := legacyInsertBatch(old, 1, entries[2:]); err != nil {
-		t.Fatal(err)
-	}
-	if err := old.Close(); err != nil {
-		t.Fatal(err)
-	}
-	st, err := OpenSQLite(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.UpsertBatch(context.Background(), 2, entries[:1]); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
-	st, err = OpenSQLite(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	if err := st.CleanupStale(context.Background(), 2, []string{"/fixture"}); err != nil {
-		t.Fatal(err)
-	}
-	if n, err := st.Count(context.Background()); err != nil || n != 2 {
-		t.Fatalf("resume lost protected entries: %d %v", n, err)
-	}
-	assertMarkerIntegrity(t, st)
-	if err := st.CleanupStale(context.Background(), 3, []string{"/fixture"}); err != nil {
-		t.Fatal(err)
-	}
-	if n, err := st.Count(context.Background()); err != nil || n != 0 {
-		t.Fatalf("protection leaked into later scan: %d %v", n, err)
+	for _, version := range []int{0, 1} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "index.sqlite")
+			var old *SQLiteStore
+			if version == 0 {
+				old = legacyMarkerStore(t, path)
+			} else {
+				var err error
+				old, err = OpenSQLite(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			defer old.Close()
+			insert := func(scanID int64, batch []model.Entry) error {
+				if version == 0 {
+					return legacyInsertBatch(old, scanID, batch)
+				}
+				return old.UpsertBatch(context.Background(), scanID, batch)
+			}
+			entries := changeEntries(3)
+			if err := insert(2, entries[:2]); err != nil {
+				t.Fatal(err)
+			} // Ordinary and unreadable entries already protected before interruption.
+			if err := insert(1, entries[2:]); err != nil {
+				t.Fatal(err)
+			}
+			if version == 1 {
+				installVersionOneMarkerIndex(t, old)
+			}
+			if err := old.Close(); err != nil {
+				t.Fatal(err)
+			}
+			st, err := OpenSQLite(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.UpsertBatch(context.Background(), 2, entries[:1]); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Close(); err != nil {
+				t.Fatal(err)
+			}
+			st, err = OpenSQLite(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			if err := st.CleanupStale(context.Background(), 2, []string{"/fixture"}); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := st.Count(context.Background()); err != nil || n != 2 {
+				t.Fatalf("resume lost protected entries: %d %v", n, err)
+			}
+			assertMarkerIntegrity(t, st)
+			if markerScalar(t, st, "SELECT count(*) FROM scan_markers WHERE entry_id IN(1,2) AND last_seen_scan=2;") != 2 {
+				t.Fatal("ordinary or inaccessible entry lost its committed marker")
+			}
+			if err := st.CleanupStale(context.Background(), 3, []string{"/fixture"}); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := st.Count(context.Background()); err != nil || n != 0 {
+				t.Fatalf("protection leaked into later scan: %d %v", n, err)
+			}
+		})
 	}
 }
 
@@ -444,19 +474,19 @@ func TestScanMarkerRowIDReuseDoesNotInheritProtection(t *testing.T) {
 	}
 }
 
-func TestScanMarkerIndexesKeepCleanupAndRootCountsCovered(t *testing.T) {
+func TestScanMarkerIndexesKeepCleanupOrderedAndRootCountsCovered(t *testing.T) {
 	st := changeStore(t)
 	for _, query := range []struct {
 		sql, index string
 	}{
-		{`SELECT entry_id,last_seen_scan FROM scan_markers
-			WHERE root_path='/fixture' AND last_seen_scan!=2 AND (last_seen_scan,entry_id)>(-1,-1)
-			ORDER BY last_seen_scan,entry_id LIMIT 16384`, "scan_markers_root_scan_idx"},
-		{`SELECT count(*) FROM entries WHERE root_path='/fixture'`, "entries_root_idx"},
+		{`SELECT entry_id FROM scan_markers
+			WHERE root_path='/fixture' AND last_seen_scan!=2 AND entry_id>0
+			ORDER BY entry_id LIMIT 16384`, "USING INDEX scan_markers_root_idx"},
+		{`SELECT count(*) FROM entries WHERE root_path='/fixture'`, "COVERING INDEX entries_root_idx"},
 	} {
 		details := strings.Join(sqliteQueryPlanDetails(t, st, "EXPLAIN QUERY PLAN "+query.sql), " ")
-		if !strings.Contains(details, "COVERING INDEX "+query.index) || strings.Contains(details, "TEMP B-TREE") {
-			t.Fatalf("lost covering index: %s", details)
+		if !strings.Contains(details, query.index) || strings.Contains(details, "TEMP B-TREE") {
+			t.Fatalf("lost indexed query plan: %s", details)
 		}
 	}
 }

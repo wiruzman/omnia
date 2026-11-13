@@ -39,7 +39,7 @@ func measureCleanupWrites(t *testing.T, entries []model.Entry, singleTransaction
 			return err
 		}
 		defer w.close()
-		stmt, err := st.db.Prepare("SELECT entry_id FROM scan_markers WHERE root_path=? AND last_seen_scan!=? ORDER BY last_seen_scan,entry_id;")
+		stmt, err := st.db.Prepare("SELECT entry_id FROM scan_markers WHERE root_path=? AND last_seen_scan!=? ORDER BY entry_id;")
 		if err != nil {
 			return err
 		}

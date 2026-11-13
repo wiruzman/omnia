@@ -63,6 +63,47 @@ func TestFullScanDefaultBatchReducesCumulativeWrites(t *testing.T) {
 	}
 }
 
+func TestStaticMarkerIndexReducesCumulativeWrites(t *testing.T) {
+	ctx := context.Background()
+	seed := shuffledWriteEntries(24000)
+	ordered := slices.Clone(seed)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Path < ordered[j].Path })
+	var volumes []writeVolume
+	for _, versionOne := range []bool{true, false} {
+		path := filepath.Join(t.TempDir(), "index.sqlite")
+		st, err := OpenSQLite(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { st.Close() })
+		if versionOne {
+			installVersionOneMarkerIndex(t, st)
+		}
+		for i := 0; i < len(seed); i += 1000 {
+			if err := st.UpsertBatch(ctx, 1700000000000000, seed[i:min(i+1000, len(seed))]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		volumes = append(volumes, measureWriteVolume(t, st, path, func() error {
+			for i := 0; i < len(ordered); i += config.DefaultScanBatchSize {
+				if err := st.UpsertBatch(ctx, 1700001000000000, ordered[i:min(i+config.DefaultScanBatchSize, len(ordered))]); err != nil {
+					return err
+				}
+			}
+			return nil
+		}))
+		assertMarkerIntegrity(t, st)
+		if n := markerScalar(t, st, "SELECT count(*) FROM scan_markers WHERE last_seen_scan=1700001000000000;"); n != int64(len(seed)) {
+			t.Fatalf("marker refresh lost rows: %d", n)
+		}
+	}
+	baseline, static := volumes[0], volumes[1]
+	t.Logf("generation vs static index; cumulative WAL bytes=%d vs %d; logical bytes including checkpoint=%d vs %d", baseline.wal, static.wal, baseline.logical, static.logical)
+	if static.wal > baseline.wal*2/3 || baseline.hasIO && static.hasIO && static.logical > baseline.logical*2/3 {
+		t.Fatalf("static-index write reduction regressed: %v", volumes)
+	}
+}
+
 // Frozen old marker refresh: same row lookup and transaction boundaries, but
 // stamps the generation in the wide entry table and its root/scan index.
 func legacyRefreshMarkers(st *SQLiteStore, scanID int64, batch []model.Entry) error {

@@ -126,9 +126,10 @@ native macOS watcher keeps no lifetime history of observed paths.
 
 Full scans refresh a separate compact scan-marker table for unchanged entries,
 avoiding writes to wide metadata rows and search indexes. Entry changes and their
-markers commit atomically; deleting an entry also deletes its marker.
-Stale-entry cleanup commits in batches of at most 16,384 rows
-and honors cancellation. Existing entries beneath unreadable paths are preserved
+markers commit atomically; deleting an entry also deletes its marker. A static
+root index avoids index rewrites when only the scan generation changes.
+Stale-entry cleanup uses an entry-ID cursor, honors cancellation, and commits at
+most 16,384 rows per batch. Existing entries beneath unreadable paths are preserved
 using the same scan marker, including across interruption/resume; intentionally
 excluded or genuinely missing paths remain eligible for cleanup.
 
@@ -140,10 +141,14 @@ files without a committed cursor restart with a fresh scan ID for safety.
 Existing indexes migrate automatically on the next writable open. Migration is
 transactional and preserves entry row IDs, scan generations, search indexes, and
 saved resume cursors. Removing the old marker column rewrites the entry table
-once, so allow temporary disk/WAL headroom during that first startup. Subsequent
-opens do not repeat the migration. Older writers cannot use the migrated schema;
-retain a pre-upgrade index backup if a writer downgrade is needed. The read-only
-CLI can read either schema without migrating it.
+once, so allow temporary disk/WAL headroom during that first startup. Indexes
+already using compact markers (0.1.5) only replace the generation-dependent
+marker index; their entry/FTS tables and scan generations are not rewritten.
+Schema work uses file-backed temporary storage to avoid retaining large native
+allocations; runtime queries retain their existing in-memory temporary storage.
+Subsequent opens do not repeat the migration. Older writers cannot use the
+migrated schema; retain a pre-upgrade index backup if a writer downgrade is
+needed. The read-only CLI can read either schema without migrating it.
 
 Coalesced subtree changes, root changes, and volume mount/unmount notifications
 recover only the affected configured scope through the existing bounded pending

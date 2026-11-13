@@ -12,8 +12,9 @@ const scanCleanupBatchSize = 16 * 1024
 const scanProtectionBatchSize = 128
 const firstScanCursor int64 = -1 << 63
 
-// CleanupStale walks the compact root/scan index with a keyset cursor. Each transaction
-// holds at most one batch, not every stale row or a root-sized transaction.
+// CleanupStale walks the static root index in entry-ID order. Generations are
+// filtered from the narrow marker rows without maintaining a changing index.
+// Each transaction holds at most one batch, not every stale row in a root.
 // Earlier batches remain committed if a later batch fails or is canceled.
 func (s *SQLiteStore) CleanupStale(ctx context.Context, scanID int64, roots []string) error {
 	if err := ctx.Err(); err != nil {
@@ -24,15 +25,15 @@ func (s *SQLiteStore) CleanupStale(ctx context.Context, scanID int64, roots []st
 		return err
 	}
 	defer w.close()
-	stmt, err := s.db.Prepare(`SELECT entry_id, last_seen_scan FROM scan_markers
-		WHERE root_path = ? AND last_seen_scan != ? AND (last_seen_scan, entry_id) > (?, ?)
-		ORDER BY last_seen_scan, entry_id LIMIT ?;`)
+	stmt, err := s.db.Prepare(`SELECT entry_id FROM scan_markers
+		WHERE root_path = ? AND last_seen_scan != ? AND entry_id > ?
+		ORDER BY entry_id LIMIT ?;`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Finalize()
 	for _, root := range roots {
-		cursorScan, cursorID := firstScanCursor, firstScanCursor
+		cursorID := firstScanCursor
 		for {
 			var ids []int64
 			err := s.db.WithTx(ctx, func() error {
@@ -40,7 +41,7 @@ func (s *SQLiteStore) CleanupStale(ctx context.Context, scanID int64, roots []st
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				for i, value := range []any{filepath.Clean(root), scanID, cursorScan, cursorID, scanCleanupBatchSize} {
+				for i, value := range []any{filepath.Clean(root), scanID, cursorID, scanCleanupBatchSize} {
 					if err := bindSQLiteAny(stmt, i+1, value); err != nil {
 						return err
 					}
@@ -56,7 +57,7 @@ func (s *SQLiteStore) CleanupStale(ctx context.Context, scanID int64, roots []st
 					if !row {
 						break
 					}
-					cursorID, cursorScan = stmt.ColumnInt64(0), stmt.ColumnInt64(1)
+					cursorID = stmt.ColumnInt64(0)
 					ids = append(ids, cursorID)
 				}
 				stmt.Reset()

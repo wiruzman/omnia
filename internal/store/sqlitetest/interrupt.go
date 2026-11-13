@@ -6,6 +6,7 @@ package sqlitetest
 #cgo LDFLAGS: -lsqlite3
 #include <sqlite3.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct {
 	sqlite3 *db;
@@ -41,6 +42,38 @@ static int deny_alter(void *unused, int action, const char *a, const char *b,
 static void deny_alter_table(sqlite3 *db) {
 	sqlite3_set_authorizer(db, deny_alter, NULL);
 }
+
+typedef struct {
+	int file_mode;
+	int file_ddl;
+	int other_ddl;
+} schema_storage;
+
+static int observe_schema_storage(void *arg, int action, const char *a,
+                                  const char *b, const char *database, const char *source) {
+	schema_storage *state = arg;
+	if (action == SQLITE_PRAGMA && a && b && !strcmp(a, "temp_store")) {
+		state->file_mode = !sqlite3_stricmp(b, "FILE");
+	}
+	switch (action) {
+	case SQLITE_ALTER_TABLE:
+	case SQLITE_CREATE_INDEX:
+	case SQLITE_CREATE_TABLE:
+	case SQLITE_CREATE_VTABLE:
+	case SQLITE_CREATE_TRIGGER:
+	case SQLITE_DROP_INDEX:
+	case SQLITE_DROP_TABLE:
+		if (state->file_mode) state->file_ddl++;
+		else state->other_ddl++;
+	}
+	return SQLITE_OK;
+}
+
+static schema_storage *watch_schema_storage(sqlite3 *db) {
+	schema_storage *state = calloc(1, sizeof(schema_storage));
+	sqlite3_set_authorizer(db, observe_schema_storage, state);
+	return state;
+}
 */
 import "C"
 
@@ -70,4 +103,15 @@ func AutoCommit(db unsafe.Pointer) bool {
 func DenyAlterTable(db unsafe.Pointer) func() {
 	C.deny_alter_table((*C.sqlite3)(db))
 	return func() { C.sqlite3_set_authorizer((*C.sqlite3)(db), nil, nil) }
+}
+
+// ObserveSchemaStorage records the temp-store mode at schema operations without
+// timing or memory-size assertions. As with fault injection, use one connection
+// and remove the authorizer before reusing it for another observer.
+func ObserveSchemaStorage(db unsafe.Pointer) (counts func() (file, other int), clear func()) {
+	state := C.watch_schema_storage((*C.sqlite3)(db))
+	return func() (int, int) { return int(state.file_ddl), int(state.other_ddl) }, func() {
+		C.sqlite3_set_authorizer((*C.sqlite3)(db), nil, nil)
+		C.free(unsafe.Pointer(state))
+	}
 }

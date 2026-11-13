@@ -115,10 +115,14 @@ status/log writes, and the metrics recorder's own overhead. Unsupported/failed
 measurements and unavailable file sizes are `null`, not fabricated zeros.
 
 Unchanged full-scan entries update a compact scan-marker table, not their wide
-metadata rows or search indexes. Markers also retain inaccessible entries across
-interrupted/resumed scans. The first writable open of an older index migrates its
+metadata rows or search indexes. Its static root index does not change when scan
+generations advance; cleanup uses an entry-ID cursor. Markers retain inaccessible
+entries across interrupted/resumed scans. The first writable open of an older index migrates its
 markers transactionally and removes the old entry-table column; that one-time
-rewrite contributes to startup I/O. Compare later reconciliation runs separately
+rewrite contributes to startup I/O. Existing compact-marker indexes only replace
+the changing generation index. Schema work uses file-backed temporary storage,
+trading temporary disk I/O for lower migration memory usage; runtime query storage
+is unchanged. Compare later reconciliation runs separately
 from migration. No metrics fields or recording defaults change with this schema.
 
 ## Time, restarts, and daily totals

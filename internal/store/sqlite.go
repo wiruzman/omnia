@@ -373,17 +373,22 @@ func (s *SQLiteStore) DeletePathPrefixCount(ctx context.Context, dirPath string)
 	return deleted, nil
 }
 
-func (s *SQLiteStore) setup() error {
+func (s *SQLiteStore) setup() (err error) {
 	for _, statement := range []string{
 		"PRAGMA journal_mode = WAL;",
 		"PRAGMA synchronous = NORMAL;",
-		"PRAGMA temp_store = MEMORY;",
 		"PRAGMA busy_timeout = 5000;",
+		// Table rewrites and index builds can need database-sized temporary
+		// storage. Keep schema work off the process's native heap.
+		"PRAGMA temp_store = FILE;",
 	} {
 		if err := s.db.Exec(statement); err != nil {
 			return err
 		}
 	}
+	// WithTx has committed or rolled back before this runs. Preserve runtime
+	// query behavior, and report a restore failure rather than hiding it.
+	defer func() { err = errors.Join(err, s.db.Exec("PRAGMA temp_store = MEMORY;")) }()
 	if err := s.db.WithTx(context.Background(), func() error {
 		if err := s.db.Exec(
 			`CREATE TABLE IF NOT EXISTS entries (

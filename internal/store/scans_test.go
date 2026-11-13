@@ -62,7 +62,12 @@ func TestFullScanUnchangedUpdatesOnlyScanMarker(t *testing.T) {
 }
 
 func TestCleanupStaleCommitsBoundedBatchesAndRetries(t *testing.T) {
-	st := changeStore(t)
+	path := filepath.Join(t.TempDir(), "index.sqlite")
+	st, err := OpenSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
 	ctx := context.Background()
 	n := scanCleanupBatchSize + 7
 	entries := changeEntries(n)
@@ -80,6 +85,13 @@ func TestCleanupStaleCommitsBoundedBatchesAndRetries(t *testing.T) {
 		t.Fatalf("batch boundary/rollback: count=%d err=%v", count, err)
 	}
 	if err := st.db.Exec("DROP TRIGGER fail_cleanup;"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err = OpenSQLite(path)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := st.CleanupStale(ctx, 2, []string{"/fixture"}); err != nil {
@@ -215,7 +227,9 @@ func TestMarkSubtreeSeenCancellationIsBoundedAndRetryable(t *testing.T) {
 func TestCleanupStaleCursorAcrossScanIDsAndRoots(t *testing.T) {
 	st := changeStore(t)
 	ctx := context.Background()
-	entries := changeEntries(scanCleanupBatchSize*2 + 3)
+	// Each interleaved old generation spans more than one batch. Mixing an
+	// entry-ID cursor with the former generation ordering would skip rows.
+	entries := changeEntries(scanCleanupBatchSize*3 + 9)
 	foreign := entries[0]
 	foreign.Path, foreign.RootPath = "/other/keep.txt", "/other"
 	if err := st.UpsertBatch(ctx, 1, append(entries, foreign)); err != nil {
@@ -231,4 +245,27 @@ func TestCleanupStaleCursorAcrossScanIDsAndRoots(t *testing.T) {
 	if n, err := st.Count(ctx); err != nil || n != want {
 		t.Fatalf("cursor/root filtering: count=%d want=%d err=%v", n, want, err)
 	}
+	assertMarkerIntegrity(t, st)
+}
+
+func TestCleanupEntryIDCursorRestartsForEachRoot(t *testing.T) {
+	st := changeStore(t)
+	entries := changeEntries(4)
+	entries[0].Path, entries[0].RootPath = "/other/remove.dat", "/other"
+	entries[3].Path, entries[3].RootPath = "/excluded/keep.dat", "/excluded"
+	if err := st.UpsertBatch(context.Background(), 1, entries); err != nil {
+		t.Fatal(err)
+	}
+	// The second root's stale entry has a lower ID than all of the first
+	// root's entries; its selection must start from the initial cursor.
+	if err := st.CleanupStale(context.Background(), 2, []string{"/fixture", "/other"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := markerScalar(t, st, "SELECT count(*) FROM entries WHERE root_path!='/excluded';"); n != 0 {
+		t.Fatalf("cursor carried across roots: %d rows remain", n)
+	}
+	if n, err := st.Count(context.Background()); err != nil || n != 1 {
+		t.Fatalf("excluded root lost: count=%d err=%v", n, err)
+	}
+	assertMarkerIntegrity(t, st)
 }
